@@ -269,10 +269,10 @@ SOURCES = [
         "id": "paragliding_store_at",
         "name": "Paragliding Store AT – Used",
         "country": "AT",
-        "url": "https://www.paragliding-store.at/shop/gebrauchtmarkt-used-stuff/",
+        "url": "https://www.paragliding-store.at/shop/gebrauchtmarkt-used-stuff/used-paragliders/",
         "enabled": True,
-        "trusted": True,  # specializovan\u00fd paragliding obchod → v\u0161e jsou kr\u00eddla
-        "notes": "E-shop statick\u00fd HTML, produktov\u00e9 karty",
+        "trusted": True,  # specializovaný paragliding obchod → vše jsou křídla
+        "notes": "Cumulus CMS shop (Jimdo), hproduct microformat – jen křídla, ne harness",
     },
     {
         "id": "gleitschirmschule_at",

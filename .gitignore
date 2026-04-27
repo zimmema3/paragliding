@@ -28,9 +28,12 @@ Thumbs.db
 
 # Output / data
 *.sqlite
-
-# Bazar watcher – Excel report (velký binární soubor, generovaný z CSV)
-data/bazar_watcher/*.xlsx
-# CSV je trackovaný záměrně (historická data pro GitHub Actions)
 *.db
 data/cache/
+
+# CSV i XLSX z bazar_watcheru jsou trackované záměrně (historie přes GitHub Actions)
+
+# Lokální / dočasné soubory
+paraglide_report.html
+run_final.txt
+README.OLD.md

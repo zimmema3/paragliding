@@ -2,8 +2,8 @@ name: Bazar Křídel – denní kontrola
 
 on:
   schedule:
-    # Každý den v 6:00 UTC (= 7:00 nebo 8:00 SEČ/SELČ)
-    - cron: "0 6 * * *"
+    # Každý den v 8:00 UTC (= 9:00 SEČ / 10:00 SELČ)
+    - cron: "0 8 * * *"
   workflow_dispatch:
     # Manuální spuštění z GitHub UI (Actions tab → Run workflow)
     inputs:
@@ -62,7 +62,7 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/bazar_watcher/listings.csv || true
+          git add data/bazar_watcher/listings.csv data/bazar_watcher/listings.xlsx || true
           # Commit jen pokud jsou změny
           git diff --cached --quiet || git commit -m "chore: bazar_watcher data update $(date -u +%Y-%m-%d)"
           git push || true

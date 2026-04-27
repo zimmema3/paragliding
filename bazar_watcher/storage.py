@@ -301,7 +301,7 @@ def _write_excel(
 ):
     try:
         current_month = TODAY[:7]  # "2026-04"
-        month_label = f"{TODAY[5:7]}/{TODAY[:4]}"  # "04/2026"
+        month_label = f"{TODAY[5:7]}-{TODAY[:4]}"  # "04-2026" (slash je v Excel sheet names zakázán)
 
         with pd.ExcelWriter(EXCEL_PATH, engine="openpyxl") as writer:
             # List 1: celá historie

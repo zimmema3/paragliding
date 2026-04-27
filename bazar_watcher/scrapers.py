@@ -140,6 +140,63 @@ def _parse_price_eur(text: str) -> Optional[float]:
     return None
 
 
+# Aktuální kurz CHF→EUR (přibližný; pro lepší přesnost lze později
+# napojit na ECB API nebo settings).
+CHF_TO_EUR = 1.0 / 1.05
+
+
+def _parse_price_chf_to_eur(text: str) -> Optional[float]:
+    """Najde CHF cenu (Fr. / CHF) a převede na EUR.
+    Strategie:
+        - Pokud text obsahuje 'Verkaufspreis' / 'Sell price' → vzít cenu hned za tímto klíčovým slovem.
+        - Jinak vzít PRVNÍ rozumnou CHF hodnotu (= cena v UI).
+    Podporuje apostrofy ' ’, non-breaking space, číslo před i za CHF.
+    Filtruje hodnoty mimo rozsah 50–100 000.
+    """
+    text = text.replace("\xa0", " ")
+
+    def _to_float(raw: str) -> Optional[float]:
+        raw = raw.replace("'", "").replace("\u2019", "").replace(" ", "")
+        if "," in raw:
+            raw = raw.replace(".", "").replace(",", ".")
+        elif raw.count(".") > 1:
+            parts = raw.split(".")
+            raw = "".join(parts[:-1]) + "." + parts[-1]
+        elif raw.endswith("."):
+            raw = raw[:-1]
+        try:
+            v = float(raw)
+        except ValueError:
+            return None
+        return v if 50 <= v <= 100000 else None
+
+    # 1) Preferuj cenu po klíčovém slově "Verkaufspreis" / "Verkaufspreis in CHF"
+    m = re.search(
+        r"Verkaufspreis(?:\s+in\s+CHF)?\s*[:.]?\s*([\d'\u2019.,]+)\s*(?:CHF|Fr\.?)?",
+        text,
+        re.IGNORECASE,
+    )
+    if m:
+        v = _to_float(m.group(1))
+        if v is not None:
+            return round(v * CHF_TO_EUR, 0)
+
+    # 2) Jinak: PRVNÍ CHF/Fr. v textu (po nebo před číslem)
+    candidates = []
+    for m in re.finditer(r"(?:Fr\.?|CHF)[\s:]*([\d'\u2019.,]+)", text, re.IGNORECASE):
+        candidates.append((m.start(), m.group(1)))
+    for m in re.finditer(r"([\d'\u2019.,]+)\s*(?:CHF|Fr\.?)\b", text, re.IGNORECASE):
+        candidates.append((m.start(), m.group(1)))
+    if not candidates:
+        return None
+    # Seřaď podle pozice v textu, vrať první rozumnou hodnotu
+    for _, raw in sorted(candidates):
+        v = _to_float(raw)
+        if v is not None:
+            return round(v * CHF_TO_EUR, 0)
+    return None
+
+
 def _parse_year(text: str) -> Optional[int]:
     """Najde rok výroby křídla v textu. Pátrá po 4místném čísle 2000–2030."""
     years = re.findall(r"\b(20[012]\d)\b", text)
@@ -623,6 +680,97 @@ scrape_gleitschirmschule_at = _scrape_generic_shop  # disabled in config (JS sho
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# AT – Paragliding Store AT (Cumulus CMS / Jimdo, hproduct microformat)
+# https://www.paragliding-store.at/shop/gebrauchtmarkt-used-stuff/used-paragliders/
+# Položky mají strukturovaná pole v desc: Baujahr/Erstflug, Größe, Gewichtsbereich
+# Skutečná cena (např. "980,00 €") je v textu, "0,00 €" je placeholder MwSt-info.
+# ──────────────────────────────────────────────────────────────────────────────
+
+def scrape_paragliding_store_at(source: dict) -> list[dict]:
+    results = []
+    soup = _soup(source["url"])
+    if soup is None:
+        return results
+
+    items = soup.find_all(class_="hproduct")
+    for it in items:
+        full = it.get_text(" ", strip=True)
+        # Title: vše před "Baujahr" / "Erstflug" (ať je první)
+        title_m = re.match(r"\s*(.+?)\s*(?=Baujahr|Erstflug)", full)
+        title = (title_m.group(1) if title_m else full[:80]).strip()
+        # Často duplicitní "Verkaufe X Verkaufe X" → ponech 2. polovinu (= čistší)
+        if title.count("Verkaufe") >= 2:
+            parts = title.split("Verkaufe")
+            title = ("Verkaufe " + parts[-1]).strip()
+        # Strip "Verkaufe " prefix pro čistší titulek
+        title = re.sub(r"^Verkaufe\s+", "", title, flags=re.IGNORECASE).strip()
+        if len(title) < 4:
+            continue
+        # Skip non-křídla (pokud by se náhodou objevilo)
+        if re.search(r"\b(gurtzeug|harness|helm|reserve|vario|skytraxx|funk)\b", title, re.IGNORECASE):
+            continue
+
+        # Cena: hledej "X,XX €" v desc, ignoruj placeholder "0,00 €"
+        price_eur = None
+        prices = re.findall(
+            r"(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d{3,}(?:,\d{1,2})?|\d{1,3},\d{1,2})\s*€",
+            full,
+        )
+        # Vyhoď "0,00" placeholdery
+        prices = [p for p in prices if _normalize_price_raw(p) not in ("0", "0.00", "0.0")]
+        if prices:
+            try:
+                price_eur = float(_normalize_price_raw(prices[0]))  # první reálná cena
+            except ValueError:
+                pass
+
+        # Year (Baujahr / Erstflug: 07.2016 nebo 05/2020)
+        year = None
+        year_m = re.search(r"(?:Baujahr|Erstflug)\s*[:.]?\s*(?:\d{1,2}[./])?(\d{4})", full)
+        if year_m:
+            year = int(year_m.group(1))
+
+        # Size (Größe: 25, MS, XS, ...)
+        size = None
+        size_m = re.search(r"Größe\s*[:.]?\s*([A-Z0-9]{1,4})", full)
+        if size_m:
+            size = size_m.group(1).strip()
+
+        # Weight range (Gewichtsbereich: 70kg - 100kg)
+        weight = None
+        wt_m = re.search(r"Gewichtsbereich\s*[:.]?\s*(\d{2,3}\s*kg?\s*[-–]\s*\d{2,3}\s*kg)", full)
+        if wt_m:
+            weight = wt_m.group(1).replace(" ", "")
+
+        # Condition (Zustand: ...)
+        condition = None
+        cond_m = re.search(r"Zustand\s*[:.]?\s*([^.]{3,40})", full)
+        if cond_m:
+            condition = cond_m.group(1).strip()[:60]
+
+        # Category (EN A/B/C/D) – obvykle není explicitní, jen pokud ho prodejce uvedl
+        cat_m = re.search(r"\bEN[-\s/]?[ABCD]\b", full, re.IGNORECASE)
+        category = cat_m.group(0).upper().replace(" ", "").replace("/", "-") if cat_m else None
+
+        results.append(_listing(
+            source_id=source["id"],
+            source_name=source["name"],
+            country=source["country"],
+            title=title[:160],
+            url=source["url"],  # Cumulus shop nemá individuální URL
+            price_eur=price_eur,
+            year=year,
+            category=category,
+            size=size,
+            weight_range=weight,
+            condition=condition,
+        ))
+
+    logger.info("[%s] scraped %d listings", source["id"], len(results))
+    return results
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # CH – Paragliding Shop CH (Shopware: div.product-box, a[title]=produkt, CHF cena)
 # https://paraglidingshop.ch/Occasionen/
 # ──────────────────────────────────────────────────────────────────────────────
@@ -654,20 +802,17 @@ def scrape_paraglidingshop_ch(source: dict) -> list[dict]:
             continue
 
         text = card.get_text(" ", strip=True)
-        # CHF cena → EUR (×1/1.05)
-        price_eur = _parse_price_eur(text)
+        # 1) Preferuj explicitní price element (Shopware: .product-price)
+        price_eur = None
+        price_el = card.select_one(".product-price") or card.select_one(".product-price-info")
+        if price_el:
+            price_eur = _parse_price_chf_to_eur(price_el.get_text(" ", strip=True))
+        # 2) Fallback: € z celého textu
         if price_eur is None:
-            chf_m = re.search(r"(?:Fr\.?|CHF)[\s:]*([\d'.,]+)", text, re.IGNORECASE)
-            if chf_m:
-                raw = chf_m.group(1).replace("'", "").replace(",", ".").replace(" ", "")
-                # Pokud je víc teček, ponech jen poslední (desetinná)
-                if raw.count(".") > 1:
-                    parts = raw.split(".")
-                    raw = "".join(parts[:-1]) + "." + parts[-1]
-                try:
-                    price_eur = round(float(raw) / 1.05, 0)
-                except ValueError:
-                    pass
+            price_eur = _parse_price_eur(text)
+        # 3) Fallback: CHF z celého textu (pomalejší, méně přesné)
+        if price_eur is None:
+            price_eur = _parse_price_chf_to_eur(text)
 
         # Kategorie (EN A/B/C/D)
         cat_m = re.search(r"\bEN[-\s/]?[ABCD]\b", title + " " + text, re.IGNORECASE)
@@ -761,14 +906,8 @@ def scrape_swissgliders_ch(source: dict) -> list[dict]:
                 dtext = (dc or dsoup.find("article") or dsoup).get_text(" ", strip=True)
                 price_eur = _parse_price_eur(dtext)
                 if price_eur is None:
-                    # CHF cena: "Fr. 3500.-" nebo "CHF 1000"
-                    chf_m = re.search(r"(?:Fr\.?|CHF)[\s:]*([\d'.,]+)", dtext, re.IGNORECASE)
-                    if chf_m:
-                        raw = chf_m.group(1).replace("'", "").replace(",", ".").replace(" ", "")
-                        try:
-                            price_eur = round(float(raw) / 1.05, 0)
-                        except ValueError:
-                            pass
+                    # CHF cena: "Fr. 3500.-" nebo "CHF 1000" nebo "Verkaufspreis in CHF: 1000"
+                    price_eur = _parse_price_chf_to_eur(dtext)
                 if not category:
                     cat2 = re.search(r"\bEN\s*[-/]?\s*[ABCD]\b", dtext, re.IGNORECASE)
                     if cat2:
@@ -858,13 +997,7 @@ def scrape_alpstein_ch(source: dict) -> list[dict]:
         # Cena: EUR nebo CHF / Fr.
         price_eur = _parse_price_eur(text)
         if price_eur is None:
-            chf_m = re.search(r"(?:Fr\.?|CHF)[\s:]*([\d'.,]+)", text, re.IGNORECASE)
-            if chf_m:
-                raw = chf_m.group(1).replace("'", "").replace(",", ".").replace(" ", "")
-                try:
-                    price_eur = round(float(raw) / 1.05, 0)
-                except ValueError:
-                    pass
+            price_eur = _parse_price_chf_to_eur(text)
             if price_eur is None:
                 # "3500.-" formát
                 p_m = re.search(r"Preis[:\s]+(\d+)[\.,\-]", text, re.IGNORECASE)
@@ -1041,7 +1174,7 @@ _SCRAPERS = {
     "bazos_cz":               scrape_bazos_cz,
     "mamekridla_cz":          scrape_mamekridla_cz,
     "willhaben_at":           scrape_willhaben_at,
-    "paragliding_store_at":   _scrape_generic_shop,
+    "paragliding_store_at":   scrape_paragliding_store_at,
     "gleitschirmschule_at":   _scrape_generic_shop,
     "flugsport_de":           scrape_flugsport_de,
     "kleinanzeigen_de":       scrape_kleinanzeigen_de,
