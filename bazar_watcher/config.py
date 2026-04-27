@@ -160,31 +160,28 @@ ALL_KNOWN_WINGS = EN_A_WINGS + LOW_B_WINGS + MID_B_WINGS
 # ──────────────────────────────────────────────────────────────────────────────
 ALERT_PROFILES = [
     {
-        "name": "Martin – M mid-B a níže",
-        "email": None,           # použije ALERT_EMAIL z .env
+        "name": "Martin – velikost M (mid-B a níže)",
+        "email": None,           # použije ALERT_EMAIL = zimmema3@gmail.com
         "max_category": "mid-B", # EN A + low-B + mid-B
-        "sizes": ["M", "ML"],    # velikosti zájmu
-        "max_price_eur": None,   # bez cenového stropu
+        "sizes": ["M", "ML", "27", "28"],  # M + rozměrové kódy odpovídající M
+        "max_price_eur": None,
         "min_year": CURRENT_YEAR - 5,
-        "countries": None,       # všechny země
+        "countries": None,
     },
     {
-        "name": "Kamarádka – XS/S EN A",
-        "email": None,
-        "max_category": "A",     # jen EN A
-        # Velikosti pro malé piloty:
-        #   XS, S  = standardní označení (Nova, Ozone, Skywalk …)
-        #   22, 24 = rozměrové kódy Advance Alpha (24 = typ. 60-80kg = S)
-        #   25, 26 = malé velikosti Ozone/Gin (Rush 5 25 = cca S)
-        "sizes": ["XS", "S", "22", "24", "25", "26"],
-        "max_price_eur": 1500,
-        "min_year": CURRENT_YEAR - 6,
+        "name": "Martin – velikost XS (mid-B a níže)",
+        "email": None,           # také na zimmema3@gmail.com
+        "max_category": "mid-B",
+        # XS, S + číselné rozměrové kódy malých velikostí (Advance, Ozone, Gin)
+        "sizes": ["XS", "S", "22", "23", "24", "25", "26"],
+        "max_price_eur": None,
+        "min_year": CURRENT_YEAR - 5,
         "countries": None,
     },
     # Přidej další profil zkopírováním a upravením:
     # {
     #     "name": "Kamarád – low-B L",
-    #     "email": None,
+    #     "email": "nekdo@gmail.com",
     #     "max_category": "low-B",
     #     "sizes": ["L", "LM"],
     #     "max_price_eur": 2000,
