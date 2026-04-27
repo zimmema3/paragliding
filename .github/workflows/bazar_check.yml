@@ -1,0 +1,68 @@
+name: Bazar Křídel – denní kontrola
+
+on:
+  schedule:
+    # Každý den v 6:00 UTC (= 7:00 nebo 8:00 SEČ/SELČ)
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+    # Manuální spuštění z GitHub UI (Actions tab → Run workflow)
+    inputs:
+      dry_run:
+        description: "Dry run (neposílat email)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["true", "false"]
+
+jobs:
+  bazar-check:
+    name: Scrape & Notify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # Potřeba pro commit dat zpět do repozitáře
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────────────────
+      - name: Checkout repozitáře
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # ── 2. Python setup ──────────────────────────────────────────────────
+      - name: Nastav Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: bazar_watcher/requirements.txt
+
+      # ── 3. Instalace závislostí ───────────────────────────────────────────
+      - name: Instaluj závislosti
+        run: |
+          pip install --upgrade pip
+          pip install -r bazar_watcher/requirements.txt
+
+      # ── 4. Spuštění scraperu ─────────────────────────────────────────────
+      - name: Spusť bazar watcher
+        env:
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+          SMTP_PORT:   ${{ secrets.SMTP_PORT }}
+          SMTP_USER:   ${{ secrets.SMTP_USER }}
+          SMTP_PASS:   ${{ secrets.SMTP_PASS }}
+          ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
+        run: |
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            python -m bazar_watcher.run --dry-run
+          else
+            python -m bazar_watcher.run
+          fi
+
+      # ── 5. Commit aktualizovaných dat ─────────────────────────────────────
+      - name: Commitni aktualizovaná data
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/bazar_watcher/listings.csv || true
+          # Commit jen pokud jsou změny
+          git diff --cached --quiet || git commit -m "chore: bazar_watcher data update $(date -u +%Y-%m-%d)"
+          git push || true
