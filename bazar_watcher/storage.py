@@ -63,7 +63,13 @@ def load_existing() -> pd.DataFrame:
 
 
 def find_new(new_listings: list[dict], existing: pd.DataFrame) -> list[dict]:
-    """Vrátí jen inzeráty, jejichž URL ještě není ve stávajících datech."""
+    """Vrátí jen inzeráty, jejichž URL (nebo source_id+title) ještě není v historii.
+    
+    Dvě strategie deduplikace:
+    1. Produkt s vlastní URL (bazar.cz, bazos) → deduplikuj dle URL
+    2. Produkt bez vlastní URL nebo s URL celé stránky (alpstein, flugsport tabulka)
+       → deduplikuj dle (source_id, title)
+    """
     seen_urls: set[str] = set(existing["url"].dropna().tolist())
     seen_title_src: set[tuple] = set(
         zip(existing["source_id"].tolist(), existing["title"].tolist())
@@ -71,14 +77,18 @@ def find_new(new_listings: list[dict], existing: pd.DataFrame) -> list[dict]:
     new = []
     for listing in new_listings:
         url = listing.get("url") or ""
+        key = (listing.get("source_id"), listing.get("title"))
+
         if url and url not in seen_urls:
+            # URL je unikátní → nový produkt
             new.append(listing)
             seen_urls.add(url)
-        elif not url:
-            key = (listing.get("source_id"), listing.get("title"))
-            if key not in seen_title_src:
-                new.append(listing)
-                seen_title_src.add(key)
+            seen_title_src.add(key)
+        elif key not in seen_title_src:
+            # URL chybí NEBO je sdílená (stránka obchodu bez individuálních URL)
+            # → deduplikuj dle source_id + title
+            new.append(listing)
+            seen_title_src.add(key)
     return new
 
 
@@ -111,16 +121,25 @@ def apply_storage_filter(listings: list[dict]) -> list[dict]:
     """
     Propustí inzeráty EN A + celý EN B (low i mid) + starší označení.
     Vyřadí EN C, D, CCC, motory a ceny pod minimem.
+
+    Speciální případ: pokud zdroj má trusted=True v config (specializované obchody),
+    propustí všechny jejich inzeráty bez kontroly kategorie/modelu.
     """
     from . import config
+
+    # Sestaví sadu trusted source_id jednou
+    trusted_ids: set[str] = {
+        s["id"] for s in config.SOURCES if s.get("trusted") and s.get("enabled")
+    }
 
     accepted_cats = [c.upper() for c in config.STORAGE_FILTER["categories"]]
     all_known = [w.lower() for w in config.ALL_KNOWN_WINGS]
     min_price = config.STORAGE_FILTER.get("min_price_eur", 150)
 
-    # Klíčová slova pro vyřazení (EN C a výše)
-    exclude_cats = ["EN C", "EN/C", "EN D", "EN/D", "CCC", "DHV 2-3", "DHV 3",
-                    "LTF 2-3", "DAGC", "motor", "B-R+", "C-"]
+    # Klíčová slova pro vyřazení (EN C a výše, a borderline B/C)
+    exclude_cats = ["EN C", "EN/C", "EN D", "EN/D", "END", "ENC", "CCC",
+                    "DHV 2-3", "DHV 3", "LTF 2-3", "DAGC", "motor", "B-R+", "C-",
+                    "EN B/C", "ENB/C"]
 
     matched = []
     for lst in listings:
@@ -136,11 +155,16 @@ def apply_storage_filter(listings: list[dict]) -> list[dict]:
         title_lower = (lst.get("title") or "").lower()
         full_text = cat + " " + title_lower
 
-        # Vyřaď EN C a výše
+        # Vyřaď EN C a výše vždy (i pro trusted zdroje)
         if any(ex.upper() in full_text.upper() for ex in exclude_cats):
             continue
 
-        # Propusť pokud kategorie odpovídá NEBO model je v known wings
+        # Trusted zdroj = specializovaný paragliding obchod → propusť vše
+        if lst.get("source_id") in trusted_ids:
+            matched.append(lst)
+            continue
+
+        # Ostatní zdroje: vyžaduj shodu kategorie nebo modelu
         cat_ok = any(ac in cat for ac in accepted_cats)
         model_ok = any(m in title_lower for m in all_known)
 
@@ -283,8 +307,10 @@ def _write_excel(
             # List 1: celá historie
             all_df.to_excel(writer, sheet_name="Vsechny inzeraty", index=False)
 
-            # List 2: tento měsíc (vše z aktuálního měsíce – kumulativní)
-            month_mask = all_df["date_found"].fillna("").str.startswith(current_month)
+            # List 2: tento měsíc – dle date_listed (kdy inzerát byl zveřejněn)
+            # fallback na date_found (kdy jsme ho poprvé viděli)
+            effective_date = all_df["date_listed"].fillna(all_df["date_found"]).fillna("")
+            month_mask = effective_date.str.startswith(current_month)
             month_df = all_df[month_mask]
             month_df.to_excel(writer, sheet_name=f"{month_label}", index=False)
 

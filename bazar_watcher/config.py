@@ -271,15 +271,17 @@ SOURCES = [
         "country": "AT",
         "url": "https://www.paragliding-store.at/shop/gebrauchtmarkt-used-stuff/",
         "enabled": True,
-        "notes": "E-shop statický HTML, produktové karty",
+        "trusted": True,  # specializovan\u00fd paragliding obchod → v\u0161e jsou kr\u00eddla
+        "notes": "E-shop statick\u00fd HTML, produktov\u00e9 karty",
     },
     {
         "id": "gleitschirmschule_at",
-        "name": "Gleitschirmschule AT – Gebraucht",
+        "name": "Gleitschirmschule AT \u2013 Gebraucht",
         "country": "AT",
         "url": "https://www.gleitschirmschule.at/shop/gebraucht/",
-        "enabled": True,
-        "notes": "E-shop statický HTML",
+        "enabled": False,  # Shop renderován JavaScriptem – statický HTML neobsahuje produkty
+        "trusted": True,
+        "notes": "JS-rendered Shopware – bez headless browseru nelze scrapovat",
     },
 
     # ── DE ──────────────────────────────────────────────────────────────────
@@ -316,7 +318,8 @@ SOURCES = [
         "country": "CH",
         "url": "https://swissgliders.ch/de/fundgrube/",
         "enabled": True,
-        "notes": "Statický HTML, produktové karty",
+        "trusted": True,
+        "notes": "article.slide-entry, dedicated scraper",
     },
     {
         "id": "paraglidingshop_ch",
@@ -324,6 +327,7 @@ SOURCES = [
         "country": "CH",
         "url": "https://paraglidingshop.ch/Gleitschirme/Occasionen-Ex-Demo/",
         "enabled": True,
+        "trusted": True,
         "notes": "E-shop statický HTML",
     },
     {
@@ -332,6 +336,7 @@ SOURCES = [
         "country": "CH",
         "url": "https://www.flugschule-alpstein.ch/occasionen/",
         "enabled": True,
+        "trusted": True,
         "notes": "Statický HTML",
     },
 ]

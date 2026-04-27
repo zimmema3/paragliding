@@ -51,13 +51,22 @@ HEADERS = {
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _get(url: str, extra_headers: dict | None = None, **kwargs) -> Optional[requests.Response]:
-    """GET s retry (2x) a timeout. Vrátí None při selhání."""
+    """GET s retry (2x) a timeout. Vrátí None při selhání.
+    4xx chyby (klient) = neretrujeme – jsou to očekávané stavy (404 = konec pagináce apod.)
+    """
     hdrs = {**HEADERS, **(extra_headers or {})}
     for attempt in range(3):
         try:
             r = _session.get(url, headers=hdrs, timeout=20, **kwargs)
             r.raise_for_status()
             return r
+        except requests.HTTPError as exc:
+            # 4xx – klientská chyba, retry nepomůže
+            if exc.response is not None and 400 <= exc.response.status_code < 500:
+                logger.debug("GET(%s) client error %d, not retrying", url, exc.response.status_code)
+                return None
+            logger.warning("GET(%s) attempt %d failed: %s", url, attempt + 1, exc)
+            time.sleep(2 ** attempt)
         except requests.RequestException as exc:
             logger.warning("GET(%s) attempt %d failed: %s", url, attempt + 1, exc)
             time.sleep(2 ** attempt)
@@ -71,29 +80,64 @@ def _soup(url: str) -> Optional[BeautifulSoup]:
     return BeautifulSoup(r.text, "html.parser")
 
 
+def _normalize_price_raw(raw: str) -> str:
+    """Normalizuje německý/francouzský číselný formát na Python float string.
+    Příklady: '1.200,00' → '1200.00', '1.600' → '1600', '820,00' → '820.00'
+    """
+    raw = re.sub(r"\s", "", raw).strip()
+    if "," in raw:
+        # Čárka = desetinný oddělovač, tečka = oddělovač tisíců
+        raw = raw.replace(".", "").replace(",", ".")
+    else:
+        parts = raw.split(".")
+        if len(parts) > 2:
+            # 1.846.53 → '1846.53'
+            raw = "".join(parts[:-1]) + "." + parts[-1]
+        elif len(parts) == 2 and len(parts[-1]) == 3 and parts[-1].isdigit():
+            # '1.600' → '1600' (3 cifry za tečkou = oddělovač tisíců)
+            raw = "".join(parts)
+    return raw
+
+
 def _parse_price_eur(text: str) -> Optional[float]:
     """Vytáhne float cenu z textu jako EUR.
-    Příklady: '450,00 EUR', '1 846,53 EUR (45 000,00 CZK)', '€ 900', '1.600 €'
+    Priorita:
+    1. '... 820,00 EUR' (explicitní EUR za číslem)
+    2. '... 1.200,00 €' (€ jako trailing currency – DE/AT/CZ standard)
+    3. '€ 900' (€ jako leading currency – jen pokud nic jiného)
+
+    Číslo musí mít alespoň 3 cifry (vyfiltruje "8", "25" apod. před €).
+    Pokud více cen (orig + sale), vrátí poslední (= sale price).
     """
     text = text.replace("\xa0", " ").strip()
-    # Preferuj explicitní EUR hodnotu
-    m = re.search(r"([\d\s.,]+)\s*EUR", text, re.IGNORECASE)
-    if not m:
-        m = re.search(r"€\s*([\d\s.,]+)", text)
-    if not m:
-        return None
-    raw = m.group(1).strip()
-    # Normalizace: odstraň mezery jako oddělovač tisíců, čárku → tečka
-    raw = re.sub(r"\s", "", raw)
-    raw = raw.replace(",", ".")
-    # Pokud více teček (1.846.53) → fixace: ponech jen poslední jako decimal
-    parts = raw.split(".")
-    if len(parts) > 2:
-        raw = "".join(parts[:-1]) + "." + parts[-1]
-    try:
-        return float(raw)
-    except ValueError:
-        return None
+    # Regex pro číslo: aspoň 3 cifry (vyfiltruje "8", "25" apod.).
+    # FR/EUR-keyword formát: "1 846,53" (mezera jako tisícový oddělovač)
+    NUM_FR = r"(\d{1,3}(?:[.\s]\d{3})+(?:,\d{1,2})?|\d{3,}(?:,\d{1,2})?|\d{1,3},\d{1,2})"
+    # AT/DE/CZ pro € formát: tečka jako tisícový OK, mezera ne (mohlo by být "25 990" = velikost+cena)
+    NUM_DE = r"(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d{3,}(?:,\d{1,2})?|\d{1,3},\d{1,2})"
+
+    # 1. Explicitní EUR za číslem (FR formát povoluje mezeru)
+    matches = re.findall(NUM_FR + r"\s*EUR\b", text, re.IGNORECASE)
+    if matches:
+        try:
+            return float(_normalize_price_raw(matches[-1].strip()))
+        except ValueError:
+            pass
+    # 2. € za číslem (DE/AT/CZ formát: tečka, NE mezera jako tis. odděl.)
+    matches = re.findall(NUM_DE + r"\s*€", text)
+    if matches:
+        try:
+            return float(_normalize_price_raw(matches[-1].strip()))
+        except ValueError:
+            pass
+    # 3. € před číslem (anglický/internacionální formát)
+    m = re.search(r"€\s*" + NUM_DE, text)
+    if m:
+        try:
+            return float(_normalize_price_raw(m.group(1).strip()))
+        except ValueError:
+            return None
+    return None
 
 
 def _parse_year(text: str) -> Optional[int]:
@@ -464,7 +508,16 @@ def scrape_willhaben_at(source: dict) -> list[dict]:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _scrape_generic_shop(source: dict) -> list[dict]:
-    """Generický scraper pro e-shopy s produktovými kartami."""
+    """Generický scraper pro e-shopy s produktovými kartami.
+
+    Strategie:
+    1. Zkusí postupně různé selektory; vybere ten, který dá nejvíc UNIKÁTNÍCH hrefů
+       (zabrání matchování navigačních / wrapper kontejnerů).
+    2. Filtruje:
+       - href musí mít alespoň 2 path segmenty (ne nav)
+       - href musí směřovat na stejnou doménu
+       - ze stejného hrefu zachová jen první výskyt (deduplikace)
+    """
     results = []
     soup = _soup(source["url"])
     if soup is None:
@@ -472,30 +525,64 @@ def _scrape_generic_shop(source: dict) -> list[dict]:
 
     base = "/".join(source["url"].split("/")[:3])
 
-    # WooCommerce / obecné: article.product, li.product, div.product-item apod.
-    selectors = [
-        {"name": "article", "class_": re.compile(r"product|item", re.I)},
-        {"name": "li", "class_": re.compile(r"product|item", re.I)},
-        {"name": "div", "class_": re.compile(r"product[-_]?(?:card|item|thumb|wrap)", re.I)},
+    # Kandidátní selektory v pořadí specifičnosti
+    candidate_selectors = [
+        # Specifické (Shopware, atd.)
+        {"name": ["div", "article"], "class_": re.compile(r"product[-_]box|product[-_]card|product[-_]item|product[-_]thumb|product[-_]wrap", re.I)},
+        # WooCommerce
+        {"name": "li", "class_": re.compile(r"\bproduct\b", re.I)},
+        {"name": "article", "class_": re.compile(r"\bproduct\b|\bitem\b", re.I)},
+        # Obecné
+        {"name": "div", "class_": re.compile(r"\bproduct\b|\bitem\b", re.I)},
     ]
-    items = []
-    for sel in selectors:
+
+    best_items: list = []
+    best_unique = 0
+    for sel in candidate_selectors:
         items = soup.find_all(sel["name"], class_=sel["class_"])
-        if items:
+        if not items:
+            continue
+        # Spočti unikátní href v této kandidátní sadě
+        unique_hrefs = set()
+        for it in items:
+            a = it.find("a", href=True)
+            if a:
+                href = a.get("href", "")
+                if href:
+                    unique_hrefs.add(href)
+        if len(unique_hrefs) > best_unique:
+            best_unique = len(unique_hrefs)
+            best_items = items
+        # Pokud první selektor už dal slušně produkty, neutrácet čas dalšími
+        if best_unique >= 5:
             break
 
+    items = best_items
     if not items:
-        # Fallback: hledej h2/h3 s <a>
         items = soup.find_all(["h2", "h3"], class_=re.compile(r"title|name", re.I))
 
+    seen_hrefs: set[str] = set()
     for item in items:
-        a_tag = item.find("a") if item.name not in ("a",) else item
+        a_tag = item.find("a", href=True) if item.name != "a" else item
         if not a_tag:
             continue
         href = a_tag.get("href", "")
         if not href:
             continue
         full_url = urljoin(base, href) if not href.startswith("http") else href
+
+        # Přeskoč navigační položky – URL musí mít alespoň 2 path segmenty
+        path = full_url.replace(base, "").rstrip("/")
+        path_parts = [p for p in path.split("/") if p]
+        if len(path_parts) < 2:
+            continue
+        # Přeskoč href mimo doménu obchodu
+        if not full_url.startswith(base):
+            continue
+        # Deduplikace: stejný href = stejný produkt (vyšší vs nižší kontejner)
+        if full_url in seen_hrefs:
+            continue
+        seen_hrefs.add(full_url)
 
         title_tag = item.find(["h2", "h3", "h4", "span"], class_=re.compile(r"title|name|product", re.I))
         title = (title_tag or a_tag).get_text(strip=True)
@@ -505,8 +592,14 @@ def _scrape_generic_shop(source: dict) -> list[dict]:
         text = item.get_text(" ", strip=True)
         price = _parse_price_eur(text)
         year = _parse_year_strict(text, ["Baujahr", "Jahr", "Rok výroby", "year"])
-        cat_m = re.search(r"\bEN\s*[ABCD]\b|\bB[-\s]G\b|\bLTF\s*1[-–]2\b", text, re.IGNORECASE)
-        category = cat_m.group(0) if cat_m else None
+        cat_m = re.search(r"\bEN[-\s/]*[ABCD]\b|\bB[-\s]G\b|\bLTF\s*1[-–]2\b", text, re.IGNORECASE)
+        category = cat_m.group(0).upper().replace("-", " ").replace("/", " ") if cat_m else None
+
+        # Velikost / hmotnostní rozsah z titulku
+        size_m = re.search(r"\b(XXS|XS|S|M|ML|L|XL|XXL|\d{2})\b", title)
+        size = size_m.group(1).upper() if size_m else None
+        wt_m = re.search(r"(\d{2,3}\s*[-–]\s*\d{2,3}\s*kg)", text, re.IGNORECASE)
+        weight = wt_m.group(1).replace(" ", "") if wt_m else None
 
         results.append(_listing(
             source_id=source["id"],
@@ -517,18 +610,285 @@ def _scrape_generic_shop(source: dict) -> list[dict]:
             price_eur=price,
             year=year,
             category=category,
+            size=size,
+            weight_range=weight,
+        ))
+
+    logger.info("[%s] scraped %d listings (selektor unique=%d)", source["id"], len(results), best_unique)
+    return results
+
+
+scrape_paragliding_store_at = _scrape_generic_shop
+scrape_gleitschirmschule_at = _scrape_generic_shop  # disabled in config (JS shop)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CH – Paragliding Shop CH (Shopware: div.product-box, a[title]=produkt, CHF cena)
+# https://paraglidingshop.ch/Occasionen/
+# ──────────────────────────────────────────────────────────────────────────────
+
+def scrape_paraglidingshop_ch(source: dict) -> list[dict]:
+    results = []
+    soup = _soup(source["url"])
+    if soup is None:
+        return results
+
+    cards = soup.find_all("div", class_=re.compile(r"\bproduct-box\b", re.I))
+    seen_hrefs = set()
+    for card in cards:
+        a = card.find("a", href=True, title=True)
+        if not a:
+            a = card.find("a", href=True)
+        if not a:
+            continue
+        href = urljoin(source["url"], a.get("href", "").strip())
+        if href in seen_hrefs:
+            continue
+        seen_hrefs.add(href)
+
+        title = (a.get("title") or a.get_text(" ", strip=True)).strip()
+        if not title or len(title) < 5:
+            continue
+        # Skip non-wing items (vouchers, accessories)
+        if re.search(r"\b(gutschein|voucher|helm|gurtzeug|harness|reserve|vario|skytraxx|funk|garmin)\b", title, re.IGNORECASE):
+            continue
+
+        text = card.get_text(" ", strip=True)
+        # CHF cena → EUR (×1/1.05)
+        price_eur = _parse_price_eur(text)
+        if price_eur is None:
+            chf_m = re.search(r"(?:Fr\.?|CHF)[\s:]*([\d'.,]+)", text, re.IGNORECASE)
+            if chf_m:
+                raw = chf_m.group(1).replace("'", "").replace(",", ".").replace(" ", "")
+                # Pokud je víc teček, ponech jen poslední (desetinná)
+                if raw.count(".") > 1:
+                    parts = raw.split(".")
+                    raw = "".join(parts[:-1]) + "." + parts[-1]
+                try:
+                    price_eur = round(float(raw) / 1.05, 0)
+                except ValueError:
+                    pass
+
+        # Kategorie (EN A/B/C/D)
+        cat_m = re.search(r"\bEN[-\s/]?[ABCD]\b", title + " " + text, re.IGNORECASE)
+        category = cat_m.group(0).upper().replace(" ", "").replace("/", "-") if cat_m else None
+
+        # Hmotnost / velikost z titulku: "(EN-B 80-100kg)"
+        wt_m = re.search(r"(\d{2,3}\s*[-–]\s*\d{2,3})\s*kg", title, re.IGNORECASE)
+        weight = wt_m.group(0).replace(" ", "") if wt_m else None
+        size_m = re.search(r"\b(XXS|XS|S|M|ML|L|XL|XXL|\d{2})\b", title)
+        size = size_m.group(1).upper() if size_m else None
+
+        year = _parse_year(title + " " + text)
+
+        results.append(_listing(
+            source_id=source["id"],
+            source_name=source["name"],
+            country=source["country"],
+            title=title[:160],
+            url=href,
+            price_eur=price_eur,
+            year=year,
+            category=category,
+            size=size,
+            weight_range=weight,
         ))
 
     logger.info("[%s] scraped %d listings", source["id"], len(results))
     return results
 
 
-scrape_paragliding_store_at = _scrape_generic_shop
-scrape_gleitschirmschule_at = _scrape_generic_shop
-scrape_swissgliders_ch = _scrape_generic_shop
-scrape_paraglidingshop_ch = _scrape_generic_shop
-scrape_alpstein_ch = _scrape_generic_shop
-scrape_mamekridla_cz_shop = _scrape_generic_shop  # alias
+# ──────────────────────────────────────────────────────────────────────────────
+# CH – Swissgliders Fundgrube (WordPress Avia theme, article.slide-entry)
+# https://swissgliders.ch/de/fundgrube/
+# ──────────────────────────────────────────────────────────────────────────────
+
+def scrape_swissgliders_ch(source: dict) -> list[dict]:
+    results = []
+    soup = _soup(source["url"])
+    if soup is None:
+        return results
+
+    articles = soup.find_all("article", class_=re.compile(r"slide-entry", re.I))
+
+    for art in articles:
+        # Titulek a URL jsou v <a class="slide-image" title="..." href="...">
+        a_tag = art.find("a", class_=re.compile(r"slide-image", re.I))
+        if not a_tag:
+            a_tag = art.find("a", href=re.compile(r"swissgliders\.ch/de/", re.I))
+        if not a_tag:
+            continue
+        href = a_tag.get("href", "").strip()
+        title = a_tag.get("title", "").strip()
+        if not href or not title:
+            continue
+        # Strip "Fundgrube " prefix if present
+        title = re.sub(r"^Fundgrube\s+", "", title, flags=re.IGNORECASE).strip()
+        if len(title) < 5:
+            continue
+
+        art_text = art.get_text(" ", strip=True)
+        # Datum: DD.MM.YYYY v textu inzerátu
+        date_m = re.search(r"(\d{1,2})\.(\d{2})\.(20[012]\d)", art_text)
+        date_listed = None
+        if date_m:
+            try:
+                date_listed = datetime.strptime(
+                    f"{date_m.group(1)}.{date_m.group(2)}.{date_m.group(3)}", "%d.%m.%Y"
+                ).strftime("%Y-%m-%d")
+            except ValueError:
+                pass
+
+        # Hmotnostní rozsah z titulku nebo textu
+        wt_m = re.search(r"(\d{2,3}\s*[-–]\s*\d{2,3}\s*kg)", title + " " + art_text, re.IGNORECASE)
+        weight = wt_m.group(1).replace(" ", "") if wt_m else None
+
+        # Velikost z titulku
+        size_m = re.search(r"\b(XXS|XS|S|M|ML|L|XL|XXL|\d{2})\b", title)
+        size = size_m.group(1).upper() if size_m else None
+
+        year = _parse_year_strict(art_text, ["Baujahr", "Kaufjahr", "Jahr"])
+        cat_m = re.search(r"\bEN\s*[-/]?\s*[ABCD]\b", art_text, re.IGNORECASE)
+        category = cat_m.group(0).upper() if cat_m else None
+
+        # Cena je jen na detail stránce (≤5 inzerátů → OK načíst)
+        price_eur = None
+        try:
+            detail_r = _get(href)
+            if detail_r:
+                dsoup = BeautifulSoup(detail_r.text, "html.parser")
+                dc = dsoup.find(["div", "section"], class_=re.compile(r"entry.content|post.content", re.I))
+                dtext = (dc or dsoup.find("article") or dsoup).get_text(" ", strip=True)
+                price_eur = _parse_price_eur(dtext)
+                if price_eur is None:
+                    # CHF cena: "Fr. 3500.-" nebo "CHF 1000"
+                    chf_m = re.search(r"(?:Fr\.?|CHF)[\s:]*([\d'.,]+)", dtext, re.IGNORECASE)
+                    if chf_m:
+                        raw = chf_m.group(1).replace("'", "").replace(",", ".").replace(" ", "")
+                        try:
+                            price_eur = round(float(raw) / 1.05, 0)
+                        except ValueError:
+                            pass
+                if not category:
+                    cat2 = re.search(r"\bEN\s*[-/]?\s*[ABCD]\b", dtext, re.IGNORECASE)
+                    if cat2:
+                        category = cat2.group(0).upper()
+            time.sleep(1)
+        except Exception:
+            pass
+
+        results.append(_listing(
+            source_id=source["id"],
+            source_name=source["name"],
+            country=source["country"],
+            title=title[:160],
+            url=href,
+            price_eur=price_eur,
+            year=year,
+            category=category,
+            size=size,
+            weight_range=weight,
+            date_listed=date_listed,
+        ))
+
+    logger.info("[%s] scraped %d listings", source["id"], len(results))
+    return results
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CH – Flugschule Alpstein Occasionen (Divi/ET Builder, div.et_pb_blurb_content)
+# https://www.flugschule-alpstein.ch/occasionen/
+# Inzeráty jsou v div.et_pb_blurb_content – vše na jedné stránce, bez detail URL
+# ──────────────────────────────────────────────────────────────────────────────
+
+def scrape_alpstein_ch(source: dict) -> list[dict]:
+    results = []
+    soup = _soup(source["url"])
+    if soup is None:
+        return results
+
+    blurbs = soup.find_all("div", class_=re.compile(r"et_pb_blurb_content", re.I))
+
+    for blurb in blurbs:
+        text = blurb.get_text(" ", strip=True)
+        if not text or len(text) < 8:
+            continue
+
+        # Titulek: text před první informací o stavu/barvě/velikosti/ceně
+        title_m = re.match(r"^(.+?)(?:\s+Zustand:|\s+Farbe:|\s+Gr[öo]sse:|\s+Preis)", text)
+        if title_m:
+            title = title_m.group(1).strip()
+        else:
+            title = " ".join(text.split()[:6])
+        if not title or len(title) < 4:
+            continue
+
+        # Přeskoč non-křídla: upoutávky, helmy, vaky, přístroje, záchranné padáky
+        NON_WING_KW = [
+            "skytraxx", "funkgerät", "funke", "handschuhe", "helm", "integralhelm",
+            "gurtzeug", "packsack", "rucksack", "container", "rettungsschirme",
+            "tasche", "bag", "variometer", "gps", "basisrausch", "ultracross",
+            "frontcontainer", "schnellpacksack", "aria", "pilot alpin", "buffy",
+            "altirando", "radical 4", "string ", "radical4", "delight", "strike",
+            "nanga", "aria ", "liter",
+        ]
+        title_lower_nw = title.lower()
+        if any(kw in title_lower_nw for kw in NON_WING_KW):
+            continue
+
+        # Kategorie z titulku: "(EN A)", "(EN B/C)"
+        cat_m = re.search(r"EN\s*[-/]?\s*[ABCD](?:[/]\s*[ABCD])?", title, re.IGNORECASE)
+        category = cat_m.group(0).upper() if cat_m else None
+        # Alternativně z celého textu
+        if not category:
+            cat_m2 = re.search(r"\bEN\s*[-/]?\s*[ABCD]\b", text, re.IGNORECASE)
+            if cat_m2:
+                category = cat_m2.group(0).upper()
+
+        # Velikost
+        size_m = re.search(r"Gr[öo]sse[:\s]+([A-Z0-9]+)", text, re.IGNORECASE)
+        size = size_m.group(1).upper() if size_m else None
+
+        # Hmotnostní rozsah (v závorce za velikostí nebo v textu)
+        wt_m = re.search(r"(\d{2,3}\s*kg\s*[-–]\s*\d{2,3}\s*kg|\d{2,3}\s*[-–]\s*\d{2,3}\s*kg)", text, re.IGNORECASE)
+        weight = wt_m.group(0).replace(" ", "") if wt_m else None
+
+        year = _parse_year_strict(text, ["Jahrgang", "Baujahr", "Jahr"])
+
+        # Cena: EUR nebo CHF / Fr.
+        price_eur = _parse_price_eur(text)
+        if price_eur is None:
+            chf_m = re.search(r"(?:Fr\.?|CHF)[\s:]*([\d'.,]+)", text, re.IGNORECASE)
+            if chf_m:
+                raw = chf_m.group(1).replace("'", "").replace(",", ".").replace(" ", "")
+                try:
+                    price_eur = round(float(raw) / 1.05, 0)
+                except ValueError:
+                    pass
+            if price_eur is None:
+                # "3500.-" formát
+                p_m = re.search(r"Preis[:\s]+(\d+)[\.,\-]", text, re.IGNORECASE)
+                if p_m:
+                    try:
+                        price_eur = round(float(p_m.group(1)) / 1.05, 0)
+                    except ValueError:
+                        pass
+
+        results.append(_listing(
+            source_id=source["id"],
+            source_name=source["name"],
+            country=source["country"],
+            title=title[:160],
+            url=source["url"],  # Žádné individuální URL na této stránce
+            price_eur=price_eur,
+            year=year,
+            category=category,
+            size=size,
+            weight_range=weight,
+        ))
+
+    logger.info("[%s] scraped %d listings", source["id"], len(results))
+    return results
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -685,9 +1045,9 @@ _SCRAPERS = {
     "gleitschirmschule_at":   _scrape_generic_shop,
     "flugsport_de":           scrape_flugsport_de,
     "kleinanzeigen_de":       scrape_kleinanzeigen_de,
-    "swissgliders_ch":        _scrape_generic_shop,
-    "paraglidingshop_ch":     _scrape_generic_shop,
-    "alpstein_ch":            _scrape_generic_shop,
+    "swissgliders_ch":        scrape_swissgliders_ch,
+    "paraglidingshop_ch":     scrape_paraglidingshop_ch,
+    "alpstein_ch":            scrape_alpstein_ch,
 }
 
 
