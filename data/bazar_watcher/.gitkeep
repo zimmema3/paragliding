@@ -1,0 +1,2 @@
+# Prázdný placeholder – zajistí, že git sleduje složku data/bazar_watcher/
+# Samotná data (CSV) jsou sledována, .xlsx je ignorováno (.gitignore)

@@ -1,0 +1,36 @@
+# Secrets / env
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+*.nbconvert.ipynb
+
+# VS Code
+.vscode/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Output / data
+*.sqlite
+
+# Bazar watcher – Excel report (velký binární soubor, generovaný z CSV)
+data/bazar_watcher/*.xlsx
+# CSV je trackovaný záměrně (historická data pro GitHub Actions)
+*.db
+data/cache/
