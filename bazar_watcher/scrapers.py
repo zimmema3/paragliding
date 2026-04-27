@@ -695,6 +695,10 @@ def scrape_paragliding_store_at(source: dict) -> list[dict]:
     items = soup.find_all(class_="hproduct")
     for it in items:
         full = it.get_text(" ", strip=True)
+        # Filtr navigačních/kategoriálních hproduct prvků – reálný inzerát
+        # vždy obsahuje Baujahr nebo Erstflug. Bez toho je to kategorie.
+        if not re.search(r"\b(Baujahr|Erstflug)\b", full, re.IGNORECASE):
+            continue
         # Title: vše před "Baujahr" / "Erstflug" (ať je první)
         title_m = re.match(r"\s*(.+?)\s*(?=Baujahr|Erstflug)", full)
         title = (title_m.group(1) if title_m else full[:80]).strip()
@@ -794,6 +798,14 @@ def scrape_paraglidingshop_ch(source: dict) -> list[dict]:
             continue
         seen_hrefs.add(href)
 
+        # Skip Shopware servisních / informačních stránek
+        # (Kontakt, Impressum, AGB, Team, Testberichte, Kategorie listings)
+        if re.search(r"/(Shop-Service|Gleitschirme/Occasionen-?Ex-?Demo)", href, re.I):
+            continue
+        # Reálný produkt má URL končící "/SW<digits>" (Shopware kód)
+        if not re.search(r"/SW\d+/?$", href):
+            continue
+
         title = (a.get("title") or a.get_text(" ", strip=True)).strip()
         if not title or len(title) < 5:
             continue
@@ -866,6 +878,9 @@ def scrape_swissgliders_ch(source: dict) -> list[dict]:
         href = a_tag.get("href", "").strip()
         title = a_tag.get("title", "").strip()
         if not href or not title:
+            continue
+        # Skip the index page itself (title=="Fundgrube", URL ends with /fundgrube/)
+        if re.search(r"/fundgrube/?$", href, re.I):
             continue
         # Strip "Fundgrube " prefix if present
         title = re.sub(r"^Fundgrube\s+", "", title, flags=re.IGNORECASE).strip()
@@ -1045,6 +1060,21 @@ def scrape_flugsport_de(source: dict) -> list[dict]:
         cells = row.find_all(["th", "td"])
         if not cells:
             continue
+
+        # Modell sloupec (typicky cells[1]) má strukturu:
+        #   <p><span>Modelname [Velikost]</span></p>
+        #   <p>Popis…</p>
+        # Vytáhneme modelové jméno čistě z prvního <p>/<span>, ne celý text.
+        model_clean = None
+        if len(cells) > 1:
+            modell_cell = cells[1]
+            first_p = modell_cell.find("p")
+            if first_p:
+                first_span = first_p.find("span")
+                model_clean = (first_span or first_p).get_text(" ", strip=True)
+            if not model_clean:
+                model_clean = modell_cell.get_text(" ", strip=True).split("\n", 1)[0]
+
         texts = [c.get_text(strip=True) for c in cells]
 
         # Detekuj řádek se záhlavím
@@ -1066,15 +1096,31 @@ def scrape_flugsport_de(source: dict) -> list[dict]:
 
         # Fallback pořadí: Hersteller | Modell | Baujahr | Gewicht | Kat | Preis
         manufacturer = col("hersteller") or (texts[0] if len(texts) > 0 else "")
-        model = col("modell") or (texts[1] if len(texts) > 1 else "")
-        baujahr = col("baujahr") or col("jahr") or (texts[2] if len(texts) > 2 else "")
-        weight = col("gewicht") or col("startgewicht") or (texts[3] if len(texts) > 3 else "")
+        # Model: použij čistý model_clean (bez popisu), ne plný text buňky
+        model = model_clean or col("modell") or (texts[1] if len(texts) > 1 else "")
+        baujahr = col("baujahr") or col("jahr") or col("bauj") or (texts[2] if len(texts) > 2 else "")
+        weight = col("gewicht") or col("startgewicht") or col("startgew") or (texts[3] if len(texts) > 3 else "")
         kategorie = col("kategorie") or col("kat") or (texts[4] if len(texts) > 4 else "")
         preis = col("preis") or col("price") or (texts[5] if len(texts) > 5 else "")
 
         title = f"{manufacturer} {model}".strip()
         if not title or len(title) < 4:
             continue
+
+        # Velikost z konce model line (čistý, bez popisu).
+        # Flugsport formáty: "Geo-6 ML", "Serac RS XS", "Mescal-4 XS",
+        # "Mito-2 RS, alle Größen" (= bez velikosti)
+        size = None
+        m_clean = model.strip().rstrip(",").strip()
+        if not re.search(r"alle\s+Gr[öo]?[ÖöÄäéÃ]+en|alle\s+Gr.+", m_clean, re.IGNORECASE):
+            size_m = re.search(r"\b(XXS|XS|S|M|ML|L|XL|XXL)\s*$", m_clean, re.IGNORECASE)
+            if size_m:
+                size = size_m.group(1).upper()
+            else:
+                # Číselný rozměrový kód (Advance: 22/24/26, Ozone: 25/27)
+                size_n = re.search(r"\b(\d{2})\s*$", m_clean)
+                if size_n:
+                    size = size_n.group(1)
 
         year_m = re.search(r"20[012]\d", baujahr)
         year = int(year_m.group(0)) if year_m else None
@@ -1092,6 +1138,7 @@ def scrape_flugsport_de(source: dict) -> list[dict]:
             price_eur=price,
             year=year,
             category=kategorie.strip() if kategorie else None,
+            size=size,
             weight_range=weight.strip() if weight else None,
         ))
 

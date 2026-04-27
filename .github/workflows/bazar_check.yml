@@ -2,8 +2,8 @@ name: Bazar Křídel – denní kontrola
 
 on:
   schedule:
-    # Každý den v 8:00 UTC (= 9:00 SEČ / 10:00 SELČ)
-    - cron: "0 8 * * *"
+    # Každý den v 07:00 UTC (≈ 09:00 CEST v létě / 08:00 CET v zimě)
+    - cron: "0 7 * * *"
   workflow_dispatch:
     # Manuální spuštění z GitHub UI (Actions tab → Run workflow)
     inputs:
