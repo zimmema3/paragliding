@@ -200,15 +200,31 @@ def apply_profile_filter(listings: list[dict], profile: dict) -> list[dict]:
 
         # Filtr: velikost
         if allowed_sizes is not None:
-            size_val = str(lst.get("size") or "").upper()
+            size_val = str(lst.get("size") or "").upper().strip()
             title_up = (lst.get("title") or "").upper()
-            size_ok = (
-                size_val in allowed_sizes
-                or any(
+
+            # 1. Strukturované pole 'size' (scraped přímo ze stránky) – nejspolehlivější
+            if size_val and size_val in allowed_sizes:
+                size_ok = True
+            else:
+                # 2. Číselné velikosti (22, 24, 26 = rozměrové kódy Advance/Ozone)
+                #    → jednoduché hledání v titulku, jsou dost specifické
+                numeric_ok = any(
                     re.search(rf"\b{re.escape(s)}\b", title_up)
-                    for s in allowed_sizes
+                    for s in allowed_sizes if s.isdigit()
                 )
-            )
+                # 3. Písmenkové velikosti (XS, S, M, L, ML)
+                #    → vyžaduj, aby stály PŘED hmotnostním rozsahem: "M 80-100kg"
+                #      (zabrání falešnému matchování "S" v "S batohem")
+                alpha_before_weight = any(
+                    re.search(
+                        rf"\b{re.escape(s)}\s+\d{{2,3}}\s*[-\u2013]\s*\d{{2,3}}\s*kg",
+                        title_up,
+                    )
+                    for s in allowed_sizes if not s.isdigit()
+                )
+                size_ok = numeric_ok or alpha_before_weight
+
             if not size_ok:
                 continue
 
@@ -260,13 +276,21 @@ def _write_excel(
     profile_matches: dict[str, list[dict]],
 ):
     try:
+        current_month = TODAY[:7]  # "2026-04"
+        month_label = f"{TODAY[5:7]}/{TODAY[:4]}"  # "04/2026"
+
         with pd.ExcelWriter(EXCEL_PATH, engine="openpyxl") as writer:
             # List 1: celá historie
-            all_df.to_excel(writer, sheet_name="Všechny inzeráty", index=False)
+            all_df.to_excel(writer, sheet_name="Vsechny inzeraty", index=False)
 
-            # List 2: dnes nové (storage filter, bez profil. filtrace)
+            # List 2: tento měsíc (vše z aktuálního měsíce – kumulativní)
+            month_mask = all_df["date_found"].fillna("").str.startswith(current_month)
+            month_df = all_df[month_mask]
+            month_df.to_excel(writer, sheet_name=f"{month_label}", index=False)
+
+            # List 3: dnešní nové (aktuální run)
             today_df = pd.DataFrame(new_today or [], columns=COLUMNS)
-            today_df.to_excel(writer, sheet_name="Dnes nové", index=False)
+            today_df.to_excel(writer, sheet_name="Dnes pridane", index=False)
 
             # Listy per profil
             for profile_name, listings in profile_matches.items():

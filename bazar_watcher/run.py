@@ -45,6 +45,15 @@ def parse_args():
     p.add_argument("--no-notify",    action="store_true")
     p.add_argument("--force-notify", action="store_true")
     p.add_argument("--filter-only",  action="store_true")
+    p.add_argument(
+        "--reimport",
+        action="store_true",
+        help=(
+            "Ukáže všechny aktuálně scrapované inzeráty (nejen nové od posledního runu). "
+            "CSV se děplikuje standardně, ale email/výpis obsahuje vše ze storage filtru. "
+            "Použi pro počáteční import nebo úplný přehled aktualních inzerátů."
+        ),
+    )
     return p.parse_args()
 
 
@@ -63,7 +72,7 @@ def _print_profile_results(profile_matches: dict):
             price_s = f"{float(lst['price_eur']):.0f} EUR" if lst.get("price_eur") else "-"
             print(f"  [{lst.get('country')}] {lst.get('source_name')}")
             print(f"  {lst.get('title','')[:100]}")
-            print(f"  {price_s}  rok {lst.get('year','?')}  kat {lst.get('category','?')}  vel {lst.get('size','?')}")
+            print(f"  {price_s}  rok {lst.get('year','?')}  kat {lst.get('category','?')}  vel {lst.get('size','?')}  {lst.get('weight_range','') or ''}")
             print(f"  {lst.get('url','')}")
             print()
 
@@ -100,32 +109,43 @@ def main():
     storage_filtered = storage.apply_storage_filter(all_scraped)
     logger.info("Po storage filtru (mid-B a níže): %d", len(storage_filtered))
 
-    # ── 4. Nové (dosud neviděné) ──────────────────────────────────────────
-    new_storage = storage.find_new(storage_filtered, existing)
-    logger.info("Nových (dosud neviditelných): %d", len(new_storage))
+    # ── 4. Nové (dosud neviděné) – pro CSV ukládání ──────────────────────────────────
+    new_for_csv = storage.find_new(storage_filtered, existing)
+    logger.info("Nových (dosud neviditelných): %d", len(new_for_csv))
+
+    # --reimport: zobraz vše ze storage filtru (i již uložené), CSV dedup zůstává
+    if args.reimport:
+        new_for_alert = storage_filtered
+        logger.info("REIMPORT: pro alert/email používám všech %d inzerátů", len(new_for_alert))
+    else:
+        new_for_alert = new_for_csv
 
     # ── 5. Per-profil matching ────────────────────────────────────────────
     # format: { profile_name: (profile_dict, [listings]) }
     profile_matches: dict[str, tuple[dict, list]] = {}
     for prof in config.ALERT_PROFILES:
-        # Filtruj z NEW storage (pro email jen nové)
-        listings_for_alert = new_storage if not args.force_notify else storage_filtered
+        listings_for_alert = new_for_alert if not args.force_notify else storage_filtered
         matched = storage.apply_profile_filter(listings_for_alert, prof)
         profile_matches[prof["name"]] = (prof, matched)
         logger.info("Profil '%s': %d matching", prof["name"], len(matched))
 
     # ── 6. Výpis do konzole ───────────────────────────────────────────────
-    print(f"\nShrnutí:")
+    mode_str = " [REIMPORT - vsechny aktualni]" if args.reimport else ""
+    print(f"\nShrnuti{mode_str}:")
     print(f"  Scraped celkem:          {len(all_scraped)}")
     print(f"  Po storage filtru:       {len(storage_filtered)}")
-    print(f"  Novych (nevidennych):    {len(new_storage)}")
+    print(f"  Novych pro CSV:          {len(new_for_csv)}")
+    if args.reimport:
+        print(f"  Pro alert (reimport):    {len(new_for_alert)}")
     for pname, (_, ml) in profile_matches.items():
         print(f"  Profil '{pname}':  {len(ml)} matching")
 
     _print_profile_results(profile_matches)
 
     # ── 7. Uložení CSV + Excel ────────────────────────────────────────────
-    updated = storage.save(new_storage, existing, profile_matches)
+    # Do CSV jde vždy jen new_for_csv (dedup), do Excelu i reimport data
+    profile_for_save = {name: listings for name, (_, listings) in profile_matches.items()}
+    updated = storage.save(new_for_csv, existing, profile_for_save)
     paths = storage.get_paths()
     print(f"\nData ulozena:")
     print(f"   CSV:   {paths['csv']}")
@@ -139,7 +159,7 @@ def main():
 
     print("\n" + "=" * 60)
     total_matching = sum(len(ml) for _, ml in profile_matches.values())
-    print(f"  Hotovo. Nových uloženo: {len(new_storage)}, matching: {total_matching}")
+    print(f"  Hotovo. Novych do CSV: {len(new_for_csv)}, matching: {total_matching}")
     print("=" * 60 + "\n")
 
 

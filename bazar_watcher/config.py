@@ -170,9 +170,13 @@ ALERT_PROFILES = [
     },
     {
         "name": "Kamarádka – XS/S EN A",
-        "email": None,           # stejný ALERT_EMAIL; změň na konkrétní addr. pro více adresátů
+        "email": None,
         "max_category": "A",     # jen EN A
-        "sizes": ["XS", "S", "22", "24"],  # číselné vel. pro menší piloty
+        # Velikosti pro malé piloty:
+        #   XS, S  = standardní označení (Nova, Ozone, Skywalk …)
+        #   22, 24 = rozměrové kódy Advance Alpha (24 = typ. 60-80kg = S)
+        #   25, 26 = malé velikosti Ozone/Gin (Rush 5 25 = cca S)
+        "sizes": ["XS", "S", "22", "24", "25", "26"],
         "max_price_eur": 1500,
         "min_year": CURRENT_YEAR - 6,
         "countries": None,

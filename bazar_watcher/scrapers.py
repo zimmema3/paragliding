@@ -50,11 +50,12 @@ HEADERS = {
 # Pomocné funkce
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _get(url: str, **kwargs) -> Optional[requests.Response]:
+def _get(url: str, extra_headers: dict | None = None, **kwargs) -> Optional[requests.Response]:
     """GET s retry (2x) a timeout. Vrátí None při selhání."""
+    hdrs = {**HEADERS, **(extra_headers or {})}
     for attempt in range(3):
         try:
-            r = _session.get(url, headers=HEADERS, timeout=20, **kwargs)
+            r = _session.get(url, headers=hdrs, timeout=20, **kwargs)
             r.raise_for_status()
             return r
         except requests.RequestException as exc:
@@ -200,14 +201,26 @@ def scrape_paragliding_bazar_cz(source: dict) -> list[dict]:
             )
             condition = cond_m.group(1).strip() if cond_m else None
 
-            # Datum zveřejnění (formát MM/DD/YYYY v textu)
-            date_m = re.search(r"(\d{2}/\d{2}/\d{4})", text)
+            # Datum zveřejnění – zkus více formátů
             date_listed = None
+            # Anglický formát MM/DD/YYYY (používá paragliding-bazar.cz)
+            date_m = re.search(r"(\d{2}/\d{2}/\d{4})", text)
             if date_m:
                 try:
                     date_listed = datetime.strptime(date_m.group(1), "%m/%d/%Y").strftime("%Y-%m-%d")
                 except ValueError:
                     pass
+            # Český formát DD.MM.YYYY nebo D.M.YYYY
+            if date_listed is None:
+                date_m2 = re.search(r"(\d{1,2})\.(\d{1,2})\.(20[012]\d)", text)
+                if date_m2:
+                    try:
+                        date_listed = datetime.strptime(
+                            f"{date_m2.group(1)}.{date_m2.group(2)}.{date_m2.group(3)}",
+                            "%d.%m.%Y",
+                        ).strftime("%Y-%m-%d")
+                    except ValueError:
+                        pass
 
             results.append(_listing(
                 source_id=source["id"],
@@ -386,11 +399,10 @@ def scrape_willhaben_at(source: dict) -> list[dict]:
             "isNavigation": "true",
             "page": page,
         }
-        r = _get(base_api, params=params, headers={
-            **HEADERS,
-            "Accept": "application/json",
-            "Referer": "https://www.willhaben.at/",
-        })
+        r = _get(base_api, params=params, extra_headers={
+                "Accept": "application/json",
+                "Referer": "https://www.willhaben.at/",
+            })
         if r is None:
             break
 
