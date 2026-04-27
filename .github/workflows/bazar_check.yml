@@ -13,6 +13,12 @@ on:
         default: "false"
         type: choice
         options: ["true", "false"]
+      force_notify:
+        description: "Vynutit e-mail i když nejsou nové matching inzeráty"
+        required: false
+        default: "false"
+        type: choice
+        options: ["true", "false"]
 
 jobs:
   bazar-check:
@@ -57,6 +63,8 @@ jobs:
         run: |
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
             python -m bazar_watcher.run --dry-run
+          elif [ "${{ github.event.inputs.force_notify }}" = "true" ]; then
+            python -m bazar_watcher.run --force-notify --reimport
           else
             python -m bazar_watcher.run
           fi
