@@ -43,13 +43,17 @@ jobs:
           pip install -r bazar_watcher/requirements.txt
 
       # ── 4. Spuštění scraperu ─────────────────────────────────────────────
+      # SMTP konfigurace je tady "naotevřeno" záměrně – privátní repo,
+      # nic kritického. Pokud se to někdy změní, přesuň hodnoty do GitHub
+      # Secrets (Settings → Secrets and variables → Actions) a nahraď
+      # vars._VALUE_ za ${{ secrets.NAZEV }}.
       - name: Spusť bazar watcher
         env:
-          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
-          SMTP_PORT:   ${{ secrets.SMTP_PORT }}
-          SMTP_USER:   ${{ secrets.SMTP_USER }}
-          SMTP_PASS:   ${{ secrets.SMTP_PASS }}
-          ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
+          SMTP_SERVER: smtp.gmail.com
+          SMTP_PORT:   "465"
+          SMTP_USER:   zimmema3@gmail.com
+          SMTP_PASS:   adg65Hfnff
+          ALERT_EMAIL: zimmema3@gmail.com
         run: |
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
             python -m bazar_watcher.run --dry-run

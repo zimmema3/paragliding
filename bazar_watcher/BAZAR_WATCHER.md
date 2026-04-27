@@ -1,497 +1,421 @@
-# 🪂 Bazar Křídel Watcher
+# 🪂 Bazar Watcher — vývojářská dokumentace
 
-Automatický hlídač bazarů s paraglidingovými křídly pro CZ, AT, DE a CH.
-Každý den (přes GitHub Actions) projde všechny bazary, uloží **vše od mid-B níže**
-do CSV/Excel a pošle email pro každý nakonfigurovaný **alert profil**.
+Detailní popis modulu `bazar_watcher/`. Pro projektový přehled (instalace, GitHub Actions, datový model) viz [hlavní README](../README.md).
 
 ---
 
 ## Obsah
 
-- [Co to dělá](#co-to-dělá)
-- [Struktura souborů](#struktura-souborů)
-- [Dvě vrstvy filtrování](#dvě-vrstvy-filtrování)
-- [Konfigurace alert profilů](#konfigurace-alert-profilů)
-- [Sledované bazary](#sledované-bazary)
-- [Rychlý start (lokálně)](#rychlý-start-lokálně)
-- [GitHub Actions setup](#github-actions-setup)
+- [Architektura a datový tok](#architektura-a-datový-tok)
+- [Soubory modulu](#soubory-modulu)
+- [Konfigurace](#konfigurace)
+  - [STORAGE_FILTER](#storage_filter)
+  - [ALERT_PROFILES](#alert_profiles)
+  - [SOURCES](#sources)
+- [CLI flagy](#cli-flagy)
+- [Jak fungují scrapery](#jak-fungují-scrapery)
+- [Cenové parsery](#cenové-parsery)
 - [Přidání nového zdroje](#přidání-nového-zdroje)
-- [Stav scraperů](#stav-scraperů)
-- [TODO / Known issues](#todo--known-issues)
+- [Přidání nového alert profilu](#přidání-nového-alert-profilu)
+- [Excel report — co je v jakém listu](#excel-report--co-je-v-jakém-listu)
+- [Debugging](#debugging)
+- [Známé problémy a TODO](#známé-problémy-a-todo)
 
 ---
 
-## Co to dělá
-
-1. Každý den v **6:00 UTC** GitHub Actions spustí scraper
-2. Projde všechny **12 zdrojů** (CZ/AT/DE/CH)
-3. **Storage filter**: propustí vše od mid-B níže (EN A + celý EN B) → uloží do CSV
-4. Porovná s historií → identifikuje **nové inzeráty** (deduplikace dle URL)
-5. **Per-profil matching**: pro každý profil v `ALERT_PROFILES` filtruje nové inzeráty
-6. Pokud profil má matching inzeráty → **pošle email** s HTML přehledem
-7. Commitne aktualizovaný `listings.csv` zpět do repozitáře
-8. `listings.xlsx` se generuje lokálně – má list pro každý profil
-
----
-
-## Struktura souborů
+## Architektura a datový tok
 
 ```
-bazar_watcher/
-├── __init__.py
-├── config.py           ← Storage filter, seznam křídel, ALERT_PROFILES, SOURCES
-├── scrapers.py         ← Scrapers (requests + BeautifulSoup/JSON/Atom)
-├── storage.py          ← CSV + Excel I/O, deduplikace, apply_storage_filter(),
-│                            apply_profile_filter()
-├── notify.py           ← Email notifikace – jeden email per příjemce, sekce per profil
-├── run.py              ← CLI orchestrátor
-├── requirements.txt
-└── BAZAR_WATCHER.md    ← Tato dokumentace
-
-data/bazar_watcher/
-├── listings.csv        ← Persistentní databáze, git tracked
-├── listings.xlsx       ← Excel report, git ignored (binary)
-└── .gitkeep
-
-.github/workflows/
-└── bazar_check.yml     ← GitHub Actions: daily cron 6:00 UTC
+┌──────────────┐      ┌────────────────────────────────┐
+│  config.py   │      │ run.py (CLI / GitHub Actions)  │
+│  SOURCES     │ ◀──── │  parse_args()                  │
+│  ALERT_*     │      │  load_existing_listings()       │
+│  STORAGE_*   │      └─────────────┬──────────────────┘
+└──────────────┘                    │
+                                    ▼
+                       ┌────────────────────────────┐
+                       │ scrapers.run_all_scrapers() │
+                       │  for src in SOURCES:        │
+                       │    _SCRAPERS[src.id](src)   │ ← per-source scraper
+                       └─────────────┬──────────────┘
+                                     │ list[dict]  (raw, ze všech zdrojů)
+                                     ▼
+                       ┌────────────────────────────┐
+                       │ storage.apply_storage_filter│ ← propustí EN A + EN B
+                       └─────────────┬──────────────┘
+                                     │ filtrovaný list[dict]
+                                     ▼
+                       ┌────────────────────────────┐
+                       │ storage.find_new()          │ ← dedup vs. listings.csv
+                       │   (source_id, url)          │
+                       │   nebo (source_id, title)   │
+                       └─────────────┬──────────────┘
+                                     │ jen nové od posledního běhu
+                                     ▼
+                       ┌────────────────────────────┐
+                       │ storage.save() →            │
+                       │   listings.csv              │ ← akumuluje
+                       │   listings.xlsx             │ ← přepíše
+                       └─────────────┬──────────────┘
+                                     │
+                                     ▼
+                       ┌────────────────────────────┐
+                       │ for profile in ALERT_PROFILES:│
+                       │   matches = apply_profile_  │
+                       │     filter(new, profile)    │
+                       └─────────────┬──────────────┘
+                                     │
+                                     ▼
+                       ┌────────────────────────────┐
+                       │ notify.send_email_per_      │
+                       │   recipient(profile_matches)│
+                       └────────────────────────────┘
 ```
 
 ---
 
-## Dvě vrstvy filtrování
+## Soubory modulu
 
-### Vrstva 1 – Storage (co se ukládá do CSV/Excel)
+| Soubor | Co obsahuje |
+|---|---|
+| [\_\_init\_\_.py](__init__.py) | Prázdný marker, dělá z modulu Python balíček |
+| [config.py](config.py) | `STORAGE_FILTER`, `EN_A_WINGS`/`LOW_B_WINGS`/`MID_B_WINGS`, `ALERT_PROFILES`, `SOURCES` |
+| [scrapers.py](scrapers.py) | HTTP session, helpery `_listing`, `_parse_price_eur`, `_parse_price_chf_to_eur`, per-source funkce, registry `_SCRAPERS`, `run_all_scrapers()` |
+| [storage.py](storage.py) | `load_existing_listings`, `apply_storage_filter`, `apply_profile_filter`, `find_new`, `save`, `_write_excel` |
+| [notify.py](notify.py) | `send_email_per_recipient(profile_matches, force=False)` — HTML render + SMTP |
+| [run.py](run.py) | CLI orchestrátor (argparse + main flow) |
+| [requirements.txt](requirements.txt) | Závislosti modulu (subset) |
 
-Vše od **mid-B níže**: EN A + celý EN B (low-B i mid-B) + starší DHV/LTF označení.
+---
 
-Nastavení v `config.py` → `STORAGE_FILTER`:
+## Konfigurace
+
+### STORAGE_FILTER
+
+Co se ukládá do CSV/Excel. Default: vše od mid-B níže.
 
 ```python
 STORAGE_FILTER = {
-    "categories": ["EN A", "EN B", "DHV 1", "LTF 1", "DHV 1-2", "B-G", "B-R", ...],
-    "min_price_eur": 150,
+    "categories": [
+        "EN A", "EN/A",
+        "EN B", "EN/B",
+        "DHV 1", "LTF 1",
+        "DHV 1-2", "LTF 1-2", "DHV 1/2",
+        "B-G", "B-R",   # Flugsport DE klasifikace
+    ],
+    "min_price_eur": 150,   # vyřadí absolutní haraburdí (např. 1 € testy)
 }
 ```
 
-EN C, D, CCC, DAGC (motory) jsou **automaticky vyřazeny**.
+EN C, EN D, CCC, ACR (=competition) se neukládají vůbec — `apply_storage_filter` má explicit blocklist přes `exclude_cats` v profilech.
 
-### Vrstva 2 – Alert profily (komu co posílat)
+### ALERT_PROFILES
 
-Každý profil v `ALERT_PROFILES` má vlastní sadu kritérií.
-Notifikace chodí jen pro **nové** inzeráty splňující daný profil.
-
----
-
-## Konfigurace alert profilů
-
-Edituj `config.py` → `ALERT_PROFILES`:
+Komu pošleme e-mail. Lista dictů, každý profil samostatně.
 
 ```python
 ALERT_PROFILES = [
     {
         "name": "Martin – M mid-B a níže",
-        "email": None,            # None = použije ALERT_EMAIL z .env
-        "max_category": "mid-B",  # "A" | "low-B" | "mid-B"
-        "sizes": ["M", "ML"],     # None = libovolná velikost
-        "max_price_eur": None,    # None = bez stropu
-        "min_year": 2021,         # nebo CURRENT_YEAR - 5
-        "countries": None,        # None = CZ+AT+DE+CH
+        "email": None,                  # None = ALERT_EMAIL z env
+        "max_category": "mid-B",        # "A" | "low-B" | "mid-B"
+        "sizes": ["M", "ML"],           # None = libovolná velikost
+        "max_price_eur": None,          # None = bez stropu
+        "min_year": CURRENT_YEAR - 5,
+        "countries": None,              # None = všechny (CZ/AT/CH/DE)
     },
     {
         "name": "Kamarádka – XS/S EN A",
         "email": None,
         "max_category": "A",
-        "sizes": ["XS", "S", "22", "24"],
+        "sizes": ["XS", "S", "22", "24", "25", "26"],
         "max_price_eur": 1500,
-        "min_year": 2020,
+        "min_year": CURRENT_YEAR - 6,
         "countries": None,
     },
-    # Přidej libovolný další profil...
 ]
 ```
 
-**Popis `max_category`:**
-| Hodnota | Co zahrnuje |
-|---------|-------------|
-| `"A"` | Pouze EN A |
-| `"low-B"` | EN A + low-B (Rush, Ion, Epsilon, Geo, …) |
-| `"mid-B"` | EN A + low-B + mid-B (Mentor, Sigma, Delta, Chili, …) |
+**Hodnoty `max_category` — kategorie zahrnuté v daném levelu:**
 
-**Více příjemců:** nastav různý `"email"` u profilů → každý příjemce dostane
-svůj email jen se svými profily. Profily se stejným emailem se slučují do jednoho emailu.
+| `max_category` | Co zahrnuje |
+|---|---|
+| `"A"` | jen EN A |
+| `"low-B"` | EN A + low-B (Rush, Ion, Epsilon, Hook, Geo, Tonic, …) |
+| `"mid-B"` | EN A + low-B + mid-B (Mentor, Sigma, Delta, Chili, Peak, …) |
+
+Mapování modelů → level je v `KNOWN_WINGS` listech v [config.py](config.py). Pokud inzerát neuvádí `category` field, scraper porovná `title` proti seznamům.
+
+**Více příjemců:**
+Profily s různým `email` se posílají na různé adresy. Profily se stejným `email` se sloučí do jedné zprávy se sekcemi (jeden e-mail, více sekcí).
+
+### SOURCES
+
+Lista nakonfigurovaných zdrojů. Klíčové fieldy:
+
+```python
+{
+    "id": "paragliding_store_at",     # unikátní, používá se jako lookup do _SCRAPERS
+    "name": "Paragliding Store AT – Used",
+    "country": "AT",                  # CZ / AT / DE / CH
+    "url": "https://...",             # vstupní URL
+    "enabled": True,                  # False = scraper se přeskočí
+    "trusted": True,                  # volitelný flag (pro budoucí logic)
+    "notes": "...",                   # popisek pro člověka
+}
+```
+
+Aktuální stav (13 zdrojů, 11 enabled):
+
+| ID | Země | Platforma | Stav |
+|---|---|---|---|
+| paragliding_bazar_cz_b | CZ | bazar (paginace) | ✅ |
+| paragliding_bazar_cz_a | CZ | bazar (paginace) | ✅ |
+| bazos_cz | CZ | Bazoš (paginace) | ✅ |
+| mamekridla_cz | CZ | e-shop | ✅ |
+| willhaben_at | AT | JSON API | ⚠️ |
+| paragliding_store_at | AT | Cumulus CMS / Jimdo (`hproduct`) | ✅ |
+| gleitschirmschule_at | AT | JS Shopware | ❌ disabled |
+| flugsport_de | DE | HTML tabulka | ✅ |
+| kleinanzeigen_de | DE | Atom feed | ⚠️ |
+| dhv_de | DE | login required | ❌ disabled |
+| swissgliders_ch | CH | WordPress (Avia) | ✅ |
+| paraglidingshop_ch | CH | Shopware | ✅ |
+| alpstein_ch | CH | Divi/ET Builder | ✅ |
 
 ---
 
-## Sledované bazary
+## CLI flagy
 
-### CZ (12 zdrojů celkem)
-| Zdroj | Metoda | Stav |
-|-------|--------|------|
-| Paragliding Bazar CZ – EN B | BS4 HTML, přímá kategorie URL | ✅ |
-| Paragliding Bazar CZ – EN A | BS4 HTML, přímá kategorie URL | ✅ |
-| Bazoš CZ | BS4 HTML | ✅ |
-| Máme Křídla CZ | BS4 generic shop | ⚠️ verify |
+```text
+python -m bazar_watcher.run [FLAGS]
 
-### AT
-| Zdroj | Metoda | Stav |
-|-------|--------|------|
-| Willhaben AT | JSON API (bez JS) | ✅ |
-| Paragliding Store AT | BS4 generic shop | ⚠️ verify |
-| Gleitschirmschule AT | BS4 generic shop | ⚠️ verify |
-
-### DE
-| Zdroj | Metoda | Stav |
-|-------|--------|------|
-| Flugsport DE | BS4 HTML tabulka (B-G/B-R kategorie) | ✅ |
-| Kleinanzeigen DE | Atom XML feed (bez JS) | ✅ |
-| DHV Gebrauchtmarkt | disabled – vyžaduje přihlášení | ❌ |
-
-### CH
-| Zdroj | Metoda | Stav |
-|-------|--------|------|
-| Swissgliders CH | BS4 generic shop | ⚠️ verify |
-| Paraglidingshop CH | BS4 generic shop | ⚠️ verify |
-| Flugschule Alpstein CH | BS4 generic shop | ⚠️ verify |
-
----
-
-## Rychlý start (lokálně)
-
-```bash
-# Z adresáře paraglide/ (= git root)
-cd C:\Users\Martin\Desktop\paraglide\paraglide
-
-# Instalace závislostí
-pip install -r bazar_watcher/requirements.txt
-
-# Zkopíruj .env.example → .env a vyplň SMTP údaje
-copy .env.example .env
-# Edituj .env: SMTP_USER, SMTP_PASS, ALERT_EMAIL
-
-# Dry run – výpis bez emailu a bez uložení
-python -m bazar_watcher.run --dry-run
-
-# Opravdové spuštění
-python -m bazar_watcher.run
-
-# Bez emailu (jen scraping + Excel)
-python -m bazar_watcher.run --no-notify
-
-# Zobraz profil-matching z existujících dat (bez scrapingu)
-python -m bazar_watcher.run --filter-only
+  --dry-run        Scrape + filtr, nic se neukládá ani neposílá. Užitečné pro testování.
+  --no-notify      Scrape + filtr + uložit, ale neposílat e-mail.
+  --force-notify   Pošli e-mail i když nejsou žádné nové matching inzeráty
+                   (jen "běh OK" notifikace).
+  --filter-only    Přeskočí scrape, použije existující listings.csv.
+                   Užitečné po změně ALERT_PROFILES — zjistíš matching ze starých dat.
+  --reimport       Profilový matching počítá ze VŠECH aktuálně viditelných inzerátů,
+                   ne jen z nových. Pro počáteční import nebo když změníš filtr.
+                   (CSV se stále děduplikuje standardně.)
 ```
 
 ---
 
-## GitHub Actions setup
+## Jak fungují scrapery
 
-### 1. Vytvoř GitHub repozitář a pushnui
+Každý zdroj má vlastní funkci `scrape_<id>(source: dict) -> list[dict]`. Vrací listings ve standardizovaném formátu (klíče: `source_id`, `country`, `title`, `url`, `price_eur`, `year`, `category`, `size`, `weight_range`, `condition`, `date_listed`).
 
-```bash
-# Na github.com vytvoř nový repo (např. "paraglide")
-# Poté lokálně:
-cd C:\Users\Martin\Desktop\paraglide\paraglide
+**Společné helpery v scrapers.py:**
 
-git remote add origin https://github.com/TVUJ_USERNAME/paraglide.git
-git branch -M main
-git push -u origin main
+| Helper | Účel |
+|---|---|
+| `_session` | Sdílená `requests.Session` s `HEADERS` |
+| `_get(url, **kw)` | GET s 3× retry, exponenciální backoff |
+| `_listing(source, **fields)` | Vytvoří dict s defaulty (None pro chybějící fieldy, `date_found` = dnešek) |
+| `_parse_price_eur(text)` | DE/AT/CZ EUR formát |
+| `_parse_price_chf_to_eur(text)` | CHF → EUR konverze (1 CHF = `1.0/1.05` EUR) |
+| `_extract_year(text)` | Najde rok 19xx/20xx v textu |
+| `_extract_size(text)` | XS/S/M/L/XL nebo numerické 22-29 |
+| `_extract_category(text)` | EN A/B/C/D, DHV/LTF varianty |
+
+**Specifické platformy a jak je scrapeme:**
+
+| Platforma | Selektor | Příklad zdroje |
+|---|---|---|
+| Bazos | `div.inzeraty` + detail page | bazos_cz |
+| WooCommerce | `li.product` / `div.product` | mamekridla_cz |
+| Shopware | `div.product-box` + `.product-price` | paraglidingshop_ch |
+| Cumulus / Jimdo | `class="hproduct"` microformat | paragliding_store_at |
+| WordPress Avia | `article.slide-entry` | swissgliders_ch |
+| Divi/ET Builder | `div.et_pb_blurb_content` | alpstein_ch |
+| HTML tabulka | `table tr td` | flugsport_de |
+| Atom feed | `feedparser`-style XML | kleinanzeigen_de |
+| JSON API | přímo `response.json()` | willhaben_at |
+
+---
+
+## Cenové parsery
+
+### `_parse_price_eur(text)`
+
+Pokrývá DE/AT/CZ formáty:
+
+```
+1.200,00 €     → 1200.0
+820 EUR        → 820.0
+1 846,53 EUR   → 1846.53
+EUR 1.500,-    → 1500.0
+820,-          → 820.0  (jen pokud je nablízku € nebo EUR)
 ```
 
-### 2. Nastav Secrets
+### `_parse_price_chf_to_eur(text)`
 
-`GitHub repo → Settings → Secrets and variables → Actions → New repository secret`
+CHF input → EUR output. Konstanta `CHF_TO_EUR = 1.0 / 1.05` (≈ 0.952).
 
-| Secret | Příklad hodnoty |
-|--------|----------------|
-| `SMTP_SERVER` | `smtp.gmail.com` |
-| `SMTP_PORT` | `465` |
-| `SMTP_USER` | `tvuj@gmail.com` |
-| `SMTP_PASS` | App password (ne běžné heslo!) |
-| `ALERT_EMAIL` | `kam@posilat.cz` |
+**Strategie (v pořadí priority):**
 
-> **Gmail App password:** Google účet → Zabezpečení → Dvoufázové ověření →
-> Hesla aplikací → vygeneruj pro "Mail / Windows Computer"
+1. Hledá keyword `Verkaufspreis` + číslo poblíž (bez ohledu na pořadí CHF/Fr.)
+2. Jinak najde všechny výskyty `CHF` nebo `Fr.` v textu (před i za číslem)
+3. Z kandidátů vrátí **první** v rozsahu 50–100 000 (eliminuje placeholder „0.00")
 
-### 3. Spuštění workflow
+**Podporované formáty:**
 
-Workflow se spustí automaticky každý den v 6:00 UTC.
-Manuálně: `Actions → Bazar Křídel – denní kontrola → Run workflow`.
+```
+CHF 2'800.00       → 2800 × 0.952 = 2667
+CHF 1’990.00       → 1990 × 0.952 = 1895   (curly apostrof U+2019)
+Fr. 999.00         → 999 × 0.952 = 951
+1000CHF            → 1000 × 0.952 = 952
+Verkaufspreis CHF: 1000   → 952
+CHF 0,00 (Verkaufspreis 980)   → preferuje 980 (Verkaufspreis keyword)
+```
+
+**Filtrace placeholderu „0,00 €":** `apply_storage_filter` má `min_price_eur = 150`, takže 0,00 ze storefrontu (kde je cena jen v popisu) propadne sítem; `_parse_price_chf_to_eur` má vlastní range filter 50–100k.
 
 ---
 
 ## Přidání nového zdroje
 
-1. `config.py` → přidej dict do `SOURCES`
-2. `scrapers.py` → napiš `scrape_<id>(source) -> list[dict]`
-3. `scrapers.py` → přidej do `_SCRAPERS` dict
-4. Test: `python -m bazar_watcher.run --dry-run`
-5. Aktualizuj tabulku zdrojů výše
+1. **Přidej zdroj do `SOURCES`** v [config.py](config.py):
+   ```python
+   {
+       "id": "novy_shop_cz",
+       "name": "Novy Shop CZ",
+       "country": "CZ",
+       "url": "https://example.cz/bazar/",
+       "enabled": True,
+       "notes": "Statický HTML, BS4",
+   },
+   ```
+
+2. **Napiš scraper** v [scrapers.py](scrapers.py):
+   ```python
+   def scrape_novy_shop_cz(source: dict) -> list[dict]:
+       resp = _get(source["url"])
+       soup = BeautifulSoup(resp.text, "html.parser")
+       results = []
+       for card in soup.select("div.product"):
+           title = card.select_one("h3").get_text(strip=True)
+           price = _parse_price_eur(card.get_text())
+           results.append(_listing(
+               source,
+               title=title,
+               url=urljoin(source["url"], card.select_one("a")["href"]),
+               price_eur=price,
+               year=_extract_year(title),
+           ))
+       return results
+   ```
+
+3. **Zaregistruj** v `_SCRAPERS` na konci [scrapers.py](scrapers.py):
+   ```python
+   _SCRAPERS = {
+       ...
+       "novy_shop_cz": scrape_novy_shop_cz,
+   }
+   ```
+
+4. **Otestuj:**
+   ```powershell
+   python -m bazar_watcher.run --dry-run 2>&1 | Select-String "novy_shop_cz"
+   ```
+
+5. Aktualizuj tabulku zdrojů v [hlavním README](../README.md) a v sekci [SOURCES](#sources) výše.
 
 ---
 
-## Přidání dalšího alert profilu
+## Přidání nového alert profilu
 
-Jen edituj `ALERT_PROFILES` v `config.py` – nepotřebuješ měnit žádný jiný soubor.
+Edituj jen `ALERT_PROFILES` v [config.py](config.py). Žádný jiný soubor není potřeba měnit.
+
+```python
+{
+    "name": "Kamarád – low-B L/XL, do 2000€",
+    "email": "kamarad@example.com",   # nebo None pro default ALERT_EMAIL
+    "max_category": "low-B",
+    "sizes": ["L", "ML", "XL", "28", "29"],
+    "max_price_eur": 2000,
+    "min_year": CURRENT_YEAR - 4,
+    "countries": ["CZ", "AT", "DE"],   # bez CH
+},
+```
+
+Otestuj:
+```powershell
+python -m bazar_watcher.run --filter-only --no-notify   # vypíše matching pro každý profil
+```
 
 ---
 
-## Stav scraperů
+## Excel report — co je v jakém listu
 
-Pro debug ⚠️ zdrojů:
+`listings.xlsx` se generuje při každém běhu. Listy:
+
+| List | Obsah |
+|---|---|
+| **Vsechny inzeraty** | Kompletní `listings.csv` (akumulovaná historie) |
+| **MM-RRRR** (např. `04-2026`) | Inzeráty z aktuálního měsíce (filtr přes `date_listed`, fallback `date_found`) |
+| **Dnes pridane** | Jen ty, které tento běh přidal nově |
+| **<profil1 name>** | Matching profilu 1 (po sanitaci znaků nepovolených v Excel sheet names) |
+| **<profil2 name>** | Matching profilu 2 |
+| … | (jeden list per `ALERT_PROFILES`) |
+
+Sheet names v Excelu nesmí obsahovat `\ / * ? : [ ]` — `_write_excel` je nahrazuje pomlčkou.
+
+---
+
+## Debugging
+
+### Test jednoho scraperu
 
 ```python
 from bazar_watcher import scrapers, config
 import requests, logging
-logging.basicConfig(level=logging.DEBUG)
 
+logging.basicConfig(level=logging.DEBUG)
 scrapers._session = requests.Session()
+scrapers._session.headers.update(scrapers.HEADERS)
+
 source = next(s for s in config.SOURCES if s["id"] == "swissgliders_ch")
-results = scrapers._scrape_generic_shop(source)
+results = scrapers._SCRAPERS[source["id"]](source)
 print(f"Nalezeno: {len(results)}")
-for r in results[:3]: print(r)
-```
-
----
-
-## TODO / Known issues
-
-- [ ] **DHV Gebrauchtmarkt** – přihlášení přes cookies / Selenium
-- [ ] **Willhaben JSON API** – záloha HTML scraping pokud API změní strukturu
-- [ ] **Kleinanzeigen Atom** – ověřit stabilitu feed URL
-- [ ] **CZK → EUR přepočet** (Bazoš) – přidat ECB API kurz místo pevného 1/25
-- [ ] **Velikostní normalizace** – mapovat "26", "S", "small" → stejný formát
-- [ ] **Playwright fallback** – pro JS-heavy stránky
-- [ ] **Telegram/Pushover** – alternativa k emailu
-- [ ] **Excel autofilter** – přidat Excel AutoFilter na všech listech
-
----
-
-*Poslední revize: 2026-04-27 · git root: `paraglide/paraglide/`*
-
-Automatický hlídač bazarů s paraglidingovými křídly pro CZ, AT, DE a CH.
-Každý den (přes GitHub Actions) projde všechny bazary, uloží inzeráty do CSV/Excel
-a pošle email pokud najde nové Low-B křídlo (EN B, max 5 let staré).
-
----
-
-## Obsah
-
-- [Co to dělá](#co-to-dělá)
-- [Struktura souborů](#struktura-souborů)
-- [Filtrovací parametry](#filtrovací-parametry)
-- [Sledované bazary](#sledované-bazary)
-- [Rychlý start (lokálně)](#rychlý-start-lokálně)
-- [GitHub Actions setup](#github-actions-setup)
-- [Přidání nového zdroje](#přidání-nového-zdroje)
-- [Stav scraperů](#stav-scraperů)
-- [TODO / Known issues](#todo--known-issues)
-
----
-
-## Co to dělá
-
-1. Každý den v **6:00 UTC** GitHub Actions spustí scraper
-2. Projde všechny **11 bazarů** (CZ/AT/DE/CH)
-3. Porovná nalezené inzeráty s historií v `data/bazar_watcher/listings.csv`
-4. Nové inzeráty uloží a **filtruje dle parametrů** (EN B, rok ≥ 2021, cena ≥ 200 €)
-5. Pokud existují nové matching inzeráty → **pošle email s přehledem**
-6. Commitne aktualizovaný CSV zpět do repozitáře
-
----
-
-## Struktura souborů
-
-```
-bazar_watcher/
-├── __init__.py
-├── config.py         ← Filtry, seznam Low-B křídel, konfigurace zdrojů
-├── scrapers.py       ← Scrapers pro každý bazar (requests + BeautifulSoup)
-├── storage.py        ← CSV + Excel I/O, deduplikace, filtrování
-├── notify.py         ← Email notifikace (SMTP)
-├── run.py            ← Hlavní orchestrátor (spouštěný CLI / GitHub Actions)
-├── requirements.txt  ← Závislosti (subset hlavního projektu)
-└── BAZAR_WATCHER.md  ← Tato dokumentace
-
-../data/bazar_watcher/
-├── listings.csv      ← Persistentní databáze všech inzerátů (git tracked)
-└── listings.xlsx     ← Excel report (generovaný, git tracked pro prohlížení)
-
-../../.github/workflows/
-└── bazar_check.yml   ← GitHub Actions workflow (denní cron)
-```
-
----
-
-## Filtrovací parametry
-
-Nastavení v `config.py` → `FILTERS`:
-
-| Parametr            | Hodnota (2026)    | Popis                                        |
-|---------------------|-------------------|----------------------------------------------|
-| `max_age_years`     | 5                 | Max stáří křídla → rok výroby ≥ 2021         |
-| `min_year`          | 2021 (dynamicky)  | Přepočítáno automaticky z aktuálního roku     |
-| `categories`        | EN B, B-G, LTF 1-2| Akceptované kategorie (case-insensitive)      |
-| `min_price_eur`     | 200               | Minimum – vyřadí haraburdí                    |
-
-**Model fallback:** Pokud stránka neuvádí kategorii, scraper porovná název
-modelu se seznamem `LOW_B_WINGS` v `config.py`. Přidej modely dle libosti.
-
----
-
-## Sledované bazary
-
-### CZ
-| Zdroj | URL | Metoda | Stav |
-|-------|-----|--------|------|
-| Paragliding Bazar CZ | paragliding-bazar.cz/cs/wings/en-b-… | BS4 HTML, přímá EN B URL | ✅ |
-| Bazoš CZ | sport.bazos.cz/inzeraty/paragliding-kridlo/ | BS4 HTML | ✅ |
-| Máme Křídla CZ | mamekridla.cz | BS4 generic shop | ⚠️ verify |
-
-### AT
-| Zdroj | URL | Metoda | Stav |
-|-------|-----|--------|------|
-| Willhaben AT | willhaben.at – search API | JSON API | ✅ |
-| Paragliding Store AT | paragliding-store.at/shop/gebrauchtmarkt-used-stuff/ | BS4 generic shop | ⚠️ verify |
-| Gleitschirmschule AT | gleitschirmschule.at/shop/gebraucht/ | BS4 generic shop | ⚠️ verify |
-
-### DE
-| Zdroj | URL | Metoda | Stav |
-|-------|-----|--------|------|
-| Flugsport DE | flugsport.de/flugsportladen/gebrauchtschirme.html | BS4 HTML tabulka | ✅ |
-| Kleinanzeigen DE | kleinanzeigen.de Atom feed | XML Atom feed | ✅ |
-| DHV Gebrauchtmarkt | dhv.de | ❌ disabled | Vyžaduje přihlášení |
-
-### CH
-| Zdroj | URL | Metoda | Stav |
-|-------|-----|--------|------|
-| Swissgliders CH | swissgliders.ch/de/fundgrube/ | BS4 generic shop | ⚠️ verify |
-| Paraglidingshop CH | paraglidingshop.ch/Gleitschirme/Occasionen-Ex-Demo/ | BS4 generic shop | ⚠️ verify |
-| Flugschule Alpstein CH | flugschule-alpstein.ch/occasionen/ | BS4 generic shop | ⚠️ verify |
-
-**Legenda:**
-- ✅ Testováno, selektory ověřeny
-- ⚠️ verify = funkcionalita napsaná, ale HTML selektory je potřeba ověřit na živém webu
-- ❌ disabled = v `config.py` je `"enabled": False`
-
----
-
-## Rychlý start (lokálně)
-
-```bash
-# 1. Přejdi do složky projektu
-cd paraglide
-
-# 2. Instaluj závislosti (pokud ještě nemáš)
-pip install -r bazar_watcher/requirements.txt
-
-# 3. Vytvoř / zkopíruj .env s SMTP údaji (viz .env.example)
-# SMTP_SERVER=smtp.gmail.com
-# SMTP_PORT=465
-# SMTP_USER=tvuj@gmail.com
-# SMTP_PASS=app-password
-# ALERT_EMAIL=kam@posilat.cz
-
-# 4. Spusť – dry run (nevysílá email, jen výpis)
-python -m bazar_watcher.run --dry-run
-
-# 5. Opravdové spuštění
-python -m bazar_watcher.run
-
-# Jen filtruj existující data bez scrapingu
-python -m bazar_watcher.run --filter-only
-```
-
----
-
-## GitHub Actions setup
-
-### 1. Inicializuj git repozitář a pushnue na GitHub
-
-```bash
-cd C:\Users\Martin\Desktop\paraglide
-git init
-git add .
-git commit -m "feat: bazar_watcher initial setup"
-# Vytvoř repo na github.com, poté:
-git remote add origin https://github.com/TVUJ_USER/paraglide.git
-git push -u origin main
-```
-
-### 2. Nastav Secrets v GitHub repozitáři
-
-`Settings → Secrets and variables → Actions → New repository secret`
-
-| Secret | Hodnota |
-|--------|---------|
-| `SMTP_SERVER` | `smtp.gmail.com` |
-| `SMTP_PORT` | `465` |
-| `SMTP_USER` | `tvuj@gmail.com` |
-| `SMTP_PASS` | App password z Google účtu |
-| `ALERT_EMAIL` | `kam@posilat.cz` |
-
-### 3. Povol workflow
-
-GitHub Actions tab → bazar_check.yml → Enable workflow.
-
-Workflow se pak spustí každý den v 6:00 UTC automaticky.
-Manuální spuštění: `Actions → Bazar Křídel – denní kontrola → Run workflow`.
-
-### 4. Commit dat
-
-Workflow automaticky commitne aktualizovaný `listings.csv` zpět do repozitáře
-po každém spuštění (jen pokud jsou změny).
-
----
-
-## Přidání nového zdroje
-
-1. **`config.py`** – přidej nový dict do `SOURCES` se správným `id`, `name`, `country`, `url`
-2. **`scrapers.py`** – napiš funkci `scrape_<id>(source: dict) -> list[dict]`
-3. **`scrapers.py`** – přidej mapování do `_SCRAPERS` dict dole v souboru
-4. Otestuj lokálně: `python -m bazar_watcher.run --dry-run`
-5. Přidej záznam do tabulky [Sledované bazary](#sledované-bazary) výše
-
----
-
-## Stav scraperů
-
-### Jak ověřit ⚠️ scrapery
-
-Pro každý `⚠️ verify` zdroj:
-
-```python
-from bazar_watcher import scrapers, config
-import requests, logging
-logging.basicConfig(level=logging.DEBUG)
-
-scrapers._session = requests.Session()
-source = next(s for s in config.SOURCES if s["id"] == "mamekridla_cz")
-results = scrapers._scrape_generic_shop(source)
 for r in results[:5]:
     print(r)
 ```
 
-Pokud vrátí prázdný list, otevři URL v browseru → DevTools → zkopíruj CSS selektory
-a uprav `_scrape_generic_shop` nebo napiš specializovaný scraper.
+### Test cenového parseru
+
+```python
+from bazar_watcher.scrapers import _parse_price_chf_to_eur
+
+print(_parse_price_chf_to_eur("CHF 2'800.00"))            # 2667.0
+print(_parse_price_chf_to_eur("Fr. 1’990.00"))             # 1895.0
+print(_parse_price_chf_to_eur("Verkaufspreis: 1000CHF"))   # 952.0
+```
+
+### Excel zápis bez scrapingu
+
+```python
+from bazar_watcher import storage
+import pandas as pd
+df = pd.read_csv("data/bazar_watcher/listings.csv")
+storage._write_excel(df, [], {})
+```
 
 ---
 
-## TODO / Known issues
+## Známé problémy a TODO
 
-- [ ] **DHV Gebrauchtmarkt** – vyžaduje přihlášení. Možnost: Selenium s cookies,
-      nebo manuální kontrola.
-- [ ] **Willhaben AT JSON API** – struktura odpovědi se může změnit.
-      Záloha: scraping HTML stránky.
-- [ ] **Kleinanzeigen Atom feed** – ověřit dostupnost feed URL (funkčnost se může měnit).
-- [ ] **Price proxy CZK→EUR** – Bazoš vrací ceny v Kč, přepočet je orientační (děleno 25).
-      Ideálně přidat živý kurz z ECB API.
-- [ ] **Playwright fallback** – pro JS-heavy stránky (willhaben, kleinanzeigen) přidat
-      volitelný playwright backend pokud JSON/Atom přístup selže.
-- [ ] **Velikostní filtr** – přidat volitelný filtr na velikost křídla (XS/S/M/L/XL)
-      v `config.py`.
-- [ ] **Telegram / Pushover notifikace** – alternativa k emailu.
+- [ ] **DHV Gebrauchtmarkt** — vyžaduje DHV členský login. Možnost: cookies + Selenium.
+- [ ] **gleitschirmschule_at** — JS-rendered Shopware. Vyžadovalo by Playwright headless.
+- [ ] **kleinanzeigen_de** — Atom feed občas vrací HTTP 500 (~1× za týden). Aktuálně 3× retry s backoffem.
+- [ ] **willhaben_at** — JSON API občas neaktualizuje výsledky (vrátí 0 listings i když přes browser jdou vidět). Možná je potřeba změnit User-Agent header.
+- [ ] **CZK → EUR** — Bazoš ceny jsou v Kč, přepočet je orientační (×0.04). Ideálně přidat ECB API pro live kurz (i pro CHF→EUR konstantu).
+- [ ] **Velikostní normalizace** — někteří výrobci používají numerické (Advance Alpha 24, Ozone Rush 25), jiní písmena (Skywalk Tonic S). Mapping je v `_extract_size`, ale není kompletní.
+- [ ] **Telegram / Pushover notifikace** — alternativa k SMTP.
+- [ ] **Excel autofilter** — přidat `auto_filter.ref` na všech listech pro pohodlnější browsing.
 
 ---
 
-*Dokumentace průběžně aktualizována. Poslední revize: 2026-04-27*
+*Poslední revize: 2026-04-27*
