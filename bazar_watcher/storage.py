@@ -62,6 +62,41 @@ def load_existing() -> pd.DataFrame:
         return pd.DataFrame(columns=COLUMNS)
 
 
+def enrich_first_seen(listings: list[dict], existing: pd.DataFrame) -> list[dict]:
+    """Doplní každému listingu pole 'first_seen' = nejstarší date_found z CSV
+    pro stejnou URL (nebo source_id+title fallback). Pro inzeráty co nejsou v CSV
+    použije TODAY (= dnes poprvé viděno).
+
+    Vrací NOVÝ list (mění in-place i původní dictionaries pro pohodlí).
+    """
+    by_url: dict[str, str] = {}
+    by_key: dict[tuple, str] = {}
+    if not existing.empty and "date_found" in existing.columns:
+        for _, row in existing.iterrows():
+            df_val = row.get("date_found")
+            if not isinstance(df_val, str) or not df_val:
+                continue
+            url = row.get("url")
+            if isinstance(url, str) and url:
+                # zachovej nejstarší (lexicograficky min pro YYYY-MM-DD)
+                prev = by_url.get(url)
+                if prev is None or df_val < prev:
+                    by_url[url] = df_val
+            key = (row.get("source_id"), row.get("title"))
+            prev = by_key.get(key)
+            if prev is None or df_val < prev:
+                by_key[key] = df_val
+
+    for lst in listings:
+        url = lst.get("url") or ""
+        key = (lst.get("source_id"), lst.get("title"))
+        first = by_url.get(url) if url else None
+        if first is None:
+            first = by_key.get(key)
+        lst["first_seen"] = first or TODAY
+    return listings
+
+
 def find_new(new_listings: list[dict], existing: pd.DataFrame) -> list[dict]:
     """Vrátí jen inzeráty, jejichž URL (nebo source_id+title) ještě není v historii.
     

@@ -69,6 +69,14 @@ def _table_rows(listings: list[dict]) -> str:
         size  = lst.get("size") or "—"
         wt    = lst.get("weight_range") or "—"
         ctry  = lst.get("country") or "—"
+        first_seen = lst.get("first_seen") or lst.get("date_found") or "—"
+        today_iso = date.today().isoformat()
+        is_new_today = first_seen == today_iso
+        first_seen_label = (
+            f"<span style='color:#0a8a3a;font-weight:bold;'>🆕 dnes</span>"
+            if is_new_today
+            else f"<span style='color:#888;'>{first_seen}</span>"
+        )
         rows += f"""
     <tr>
       <td style="padding:5px 8px;border:1px solid #ddd;">{ctry} – {src}</td>
@@ -80,6 +88,7 @@ def _table_rows(listings: list[dict]) -> str:
       <td style="padding:5px 8px;border:1px solid #ddd;text-align:right;">{price}</td>
       <td style="padding:5px 8px;border:1px solid #ddd;text-align:center;">{size}</td>
       <td style="padding:5px 8px;border:1px solid #ddd;text-align:center;">{wt}</td>
+      <td style="padding:5px 8px;border:1px solid #ddd;text-align:center;font-size:11px;">{first_seen_label}</td>
     </tr>"""
     return rows
 
@@ -112,6 +121,7 @@ def _profile_section(profile: dict, listings: list[dict]) -> str:
         <th style="padding:6px 8px;border:1px solid #ddd;">Cena</th>
         <th style="padding:6px 8px;border:1px solid #ddd;">Vel.</th>
         <th style="padding:6px 8px;border:1px solid #ddd;">Váha</th>
+        <th style="padding:6px 8px;border:1px solid #ddd;">Poprvé viděno</th>
       </tr>
     </thead>
     <tbody>{rows}</tbody>

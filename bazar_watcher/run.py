@@ -125,6 +125,8 @@ def main():
     profile_matches: dict[str, tuple[dict, list]] = {}
     for prof in config.ALERT_PROFILES:
         listings_for_alert = new_for_alert if not args.force_notify else storage_filtered
+        # Doplň first_seen z CSV (pro reimport/force_notify ukáže reálné stáří)
+        storage.enrich_first_seen(listings_for_alert, existing)
         matched = storage.apply_profile_filter(listings_for_alert, prof)
         profile_matches[prof["name"]] = (prof, matched)
         logger.info("Profil '%s': %d matching", prof["name"], len(matched))
