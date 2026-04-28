@@ -4,7 +4,7 @@ Privátní repo se dvěma nezávislými nástroji pro paragliding pilota:
 
 | Modul | Co dělá | Spouštění |
 |---|---|---|
-| **[bazar_watcher/](bazar_watcher/)** | Denně scrapuje 11 bazarů křídel (CZ/AT/CH/DE), ukládá do CSV/Excel, posílá e-mail s novými inzeráty splňujícími profilové filtry | GitHub Actions cron 8:00 UTC |
+| **[bazar_watcher/](bazar_watcher/)** | Denně scrapuje 18 bazarů křídel (CZ/AT/CH/DE), ukládá do CSV/Excel, posílá e-mail s novými inzeráty splňujícími profilové filtry | GitHub Actions cron 7:00 UTC |
 | **[paragliding_weather_alert.ipynb](paragliding_weather_alert.ipynb)** + [manual_run.py](manual_run.py) | Vyhodnocuje meteo z Open-Meteo pro vzletovky do ~400 km od Č. Budějovic, generuje HTML report | Lokálně (notebook nebo CLI) |
 
 ---
@@ -116,23 +116,59 @@ listings.xlsx — historie + tento měsíc + dnes přidané + per profil
 
 Detaily a recepty pro úpravy: [bazar_watcher/BAZAR_WATCHER.md](bazar_watcher/BAZAR_WATCHER.md).
 
-### Sledované zdroje (13 nakonfigurovaných, 11 aktivních)
+### Sledované zdroje (18 nakonfigurovaných, 16 aktivních)
 
-| ID | Země | Typ | Stav |
-|---|---|---|---|
-| `paragliding_bazar_cz_b` | CZ | bazar, EN B kategorie, paginace | ✅ |
-| `paragliding_bazar_cz_a` | CZ | bazar, EN A kategorie, paginace | ✅ |
-| `bazos_cz` | CZ | bazar, paginace | ✅ |
-| `mamekridla_cz` | CZ | e-shop | ✅ |
-| `willhaben_at` | AT | JSON API, paginace | ⚠️ občasné výpadky |
-| `paragliding_store_at` | AT | Cumulus CMS (Jimdo, hproduct) | ✅ |
-| `gleitschirmschule_at` | AT | JS-rendered Shopware | ❌ disabled |
-| `flugsport_de` | DE | HTML tabulka | ✅ |
-| `kleinanzeigen_de` | DE | Atom feed | ⚠️ občasné HTTP 500 |
-| `dhv_de` | DE | vyžaduje login | ❌ disabled |
-| `swissgliders_ch` | CH | WordPress Avia | ✅ |
-| `paraglidingshop_ch` | CH | Shopware | ✅ |
-| `alpstein_ch` | CH | Divi/ET Builder | ✅ |
+| ID | Země | Typ | Stav | Pozn. |
+|---|---|---|---|---|
+| `paragliding_bazar_cz_b` | CZ | bazar, EN B kategorie, paginace | ✅ | 44 listings, ~36% cena |
+| `paragliding_bazar_cz_a` | CZ | bazar, EN A kategorie, paginace | ✅ | 29 listings, ~52% cena |
+| `bazos_cz` | CZ | inzertní portál (`div.inzeraty`) | ✅ | 8 listings, 88% cena, dedup dle URL |
+| `mamekridla_cz` | CZ | e-shop | ✅ | 28 listings, kategorie/size se neparsují |
+| `airsport_cz` | CZ | PrestaShop | ✅ | nový zdroj |
+| `abc_paragliding_cz` | CZ | HTML tabulka | ✅ | nový zdroj, plný výtěžek |
+| `willhaben_at` | AT | JSON API, paginace | ⚠️ | občasné výpadky / 0 listings |
+| `paragliding_store_at` | AT | Cumulus CMS (Jimdo, hproduct) | ✅ | |
+| `parafly_at` | AT | e-shop | ✅ | |
+| `gleitschirmschule_at` | AT | JS-rendered Shopware | ❌ | disabled |
+| `flugsport_de` | DE | HTML tabulka | ⚠️ | ceny nejsou na výpisu (jen detail) |
+| `hochries_de` | DE | e-shop | ✅ | |
+| `kleinanzeigen_de` | DE | Atom feed | ⚠️ | server vrací HTTP 500 |
+| `dhv_de` | DE | vyžaduje login | ❌ | disabled |
+| `swissgliders_ch` | CH | WordPress Avia | ✅ | |
+| `paraglidingshop_ch` | CH | Shopware | ✅ | |
+| `alpstein_ch` | CH | Divi/ET Builder | ✅ | |
+| `fly_ikarus_ch` | CH | e-shop | ✅ | |
+
+### Kvalita scrapingu
+
+Aktuální fill-rate napříč zdroji (z `python scripts/quality_report.py`):
+
+```
+source_id                       n  price   year    cat   size
+--------------------------------------------------------------
+paragliding_bazar_cz_b         44    36%    98%   100%    75%
+paragliding_bazar_cz_a         29    52%    90%   100%    93%
+bazos_cz                        8    88%     0%    25%    12%
+mamekridla_cz                  28    21%    43%     0%     0%
+abc_paragliding_cz             11   100%    91%   100%   100%
+airsport_cz                     8   100%     0%     0%   100%
+paragliding_store_at           10   100%    90%     0%   100%
+parafly_at                      4   100%     0%     0%    75%
+flugsport_de                   17     0%    88%   100%    59%
+hochries_de                    24   100%     0%     0%   100%
+swissgliders_ch                 3   100%   100%     0%   100%
+paraglidingshop_ch              6   100%    17%    50%   100%
+alpstein_ch                    14    36%    21%    57%    86%
+fly_ikarus_ch                  17   100%     0%     0%    59%
+willhaben_at                    0      -      -      -      -   (0 listings)
+kleinanzeigen_de                0      -      -      -      -   (HTTP 500)
+--------------------------------------------------------------
+TOTAL                         223
+```
+
+- **Cena:** 13/16 zdrojů má ≥36 %. `flugsport_de` ji nezveřejňuje na výpisu.
+- **Year/category:** u e-shopů často chybí v titulku (model bez ročníku) — to je očekávané.
+- **Diagnostika:** `python scripts/quality_report.py` projde všechny `SOURCES`, vypíše tabulku.
 
 ---
 
@@ -140,7 +176,7 @@ Detaily a recepty pro úpravy: [bazar_watcher/BAZAR_WATCHER.md](bazar_watcher/BA
 
 Workflow [.github/workflows/bazar_check.yml](.github/workflows/bazar_check.yml) běží:
 
-- **Cron:** `0 8 * * *` (denně 8:00 UTC = 9:00 SEČ / 10:00 SELČ)
+- **Cron:** `0 7 * * *` (denně 7:00 UTC = 8:00 SEČ / 9:00 SELČ)
 - **Manuálně:** [Actions → Bazar Křídel → Run workflow](https://github.com/zimmema3/paragliding/actions)
 
 Co dělá:

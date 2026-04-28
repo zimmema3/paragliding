@@ -362,6 +362,7 @@ def scrape_bazos_cz(source: dict) -> list[dict]:
     results = []
     base = "https://sport.bazos.cz"
     page = 0  # Bazoš paginuje po 20: ?od=0, ?od=20, ...
+    seen_urls = set()
 
     while True:
         url = source["url"] if page == 0 else f"{source['url']}?od={page}"
@@ -369,42 +370,87 @@ def scrape_bazos_cz(source: dict) -> list[dict]:
         if soup is None:
             break
 
-        # Každý inzerát: div.inzeraty > div.inzerat (nebo podobná struktura)
-        # Fallback: hledej <h2> s <a> odkazem na /inzerat/
-        items = soup.find_all("a", href=re.compile(r"/inzerat/\d+/"))
+        # Každé inzerát-okno: div.inzeraty (obsahuje nadpis + cenu + popis)
+        items = soup.select("div.inzeraty")
+        if not items:
+            # Fallback: starší struktura
+            items = soup.find_all("div", class_=re.compile(r"\binzerat", re.I))
         if not items:
             break
 
         new_count = 0
-        for a in items:
-            href = a.get("href", "")
+        for box in items:
+            # Nadpis + URL (h2.nadpis a má text, div.inzeratynadpis a je image link)
+            title_el = box.select_one("h2.nadpis a, h2 a, div.inzeratynadpis h2 a")
+            if not title_el:
+                title_el = box.select_one("div.inzeratynadpis a")
+            if not title_el:
+                continue
+            href = title_el.get("href", "")
             if not href:
                 continue
             full_url = urljoin(base, href)
-            title = a.get_text(strip=True)
+            if full_url in seen_urls:
+                continue
+            seen_urls.add(full_url)
+            title = title_el.get_text(" ", strip=True)
+            if not title:
+                # fallback z img alt
+                img = box.find("img")
+                if img and img.get("alt"):
+                    title = img["alt"].strip()
             if not title:
                 continue
 
-            # Rodičovský kontejner pro cenu a datum
-            parent = a.find_parent(["div", "li", "article"]) or a.find_parent()
-            parent_text = parent.get_text(" ", strip=True) if parent else title
-
-            price = _parse_price_eur(parent_text.replace("Kč", ""))
-            # Bazoš má ceny v Kč – přepočet není spolehlivý, necháme None pokud není EUR
-            # Pro Kč: zaznamenáme do price_eur jako None, do title dáme cenu
-            kc_m = re.search(r"([\d\s]+)\s*Kč", parent_text)
+            # Cena – v .inzeratycena je buď "8 000 Kč" nebo "V textu"
             price_eur = None
-            if kc_m:
-                kc_raw = re.sub(r"\s", "", kc_m.group(1))
-                try:
-                    price_eur = round(float(kc_raw) / 25.0, 0)  # orientační přepočet
-                except ValueError:
-                    pass
+            cena_el = box.select_one("div.inzeratycena, .cena")
+            if cena_el:
+                cena_txt = cena_el.get_text(" ", strip=True)
+                kc_m = re.search(r"([\d\s\u00a0]+)\s*K[čc]", cena_txt)
+                if kc_m:
+                    kc_raw = re.sub(r"[\s\u00a0]", "", kc_m.group(1))
+                    try:
+                        price_eur = round(float(kc_raw) / 25.0, 0)
+                    except ValueError:
+                        pass
 
-            year = _parse_year(parent_text)
-            # Kategorie z textu nadpisu
-            cat_m = re.search(r"\bEN\s*[-/ ]?\s*[ABCD]\b|\bEN\s[ABCD]\b", title, re.IGNORECASE)
-            category = cat_m.group(0).upper().replace(" ", " ") if cat_m else None
+            # Pokud cena byla "V textu", zkus z popisu
+            box_txt = box.get_text(" ", strip=True)
+            if price_eur is None:
+                kc_m2 = re.search(r"([\d\s\u00a0]+)\s*K[čc]", box_txt)
+                if kc_m2:
+                    kc_raw = re.sub(r"[\s\u00a0]", "", kc_m2.group(1))
+                    try:
+                        price_eur = round(float(kc_raw) / 25.0, 0)
+                    except ValueError:
+                        pass
+
+            # Rok – jen z titulku (jinak by se chytlo datum publikace inzerátu)
+            year = _parse_year(title)
+            cat_m = re.search(r"\bEN[-\s/]?[ABCD]\b", box_txt, re.IGNORECASE)
+            category = cat_m.group(0).upper().replace(" ", "-").replace("/", "-") if cat_m else None
+
+            # Velikost: hledá explicitní písmenovou velikost; číselná velikost
+            # u Bazoše nebývá v titulku (model má často číslo), proto preferujeme písmena.
+            size = None
+            size_m = re.search(r"\b(XXS|XS|S|M|ML|L|XL|XXL)\b", title)
+            if size_m:
+                size = size_m.group(1)
+
+            # Weight range (např. "85-105kg")
+            weight_range = None
+            wr = re.search(r"(\d{2,3}\s*[-–]\s*\d{2,3})\s*kg", box_txt)
+            if wr:
+                weight_range = wr.group(1).replace(" ", "")
+
+            # Skip non-křídla (helma, sedačka apod.)
+            if re.search(
+                r"\b(sedačka|sedacka|gurt|harness|záložn|reserve|přilba|prilba|vario|"
+                r"helma|batoh|rucksack|skytraxx|garmin|cockpit)\b",
+                title + " " + box_txt[:200], re.IGNORECASE,
+            ):
+                continue
 
             results.append(_listing(
                 source_id=source["id"],
@@ -415,6 +461,8 @@ def scrape_bazos_cz(source: dict) -> list[dict]:
                 price_eur=price_eur,
                 year=year,
                 category=category,
+                size=size,
+                weight_range=weight_range,
             ))
             new_count += 1
 
