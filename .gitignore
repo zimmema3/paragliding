@@ -2,6 +2,9 @@
 .env
 .env.*
 !.env.example
+data/bazar_watcher/pw.txt
+data/bazar_watcher/*.secret
+data/bazar_watcher/secrets/
 
 # Logs
 *.log
