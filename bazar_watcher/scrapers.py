@@ -1395,6 +1395,200 @@ def _scrape_shopware(source: dict) -> list[dict]:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Generický PrestaShop scraper – article.product-miniature karty
+# Použití: airsport_cz (CZ s Kč → EUR konverze)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _scrape_prestashop(source: dict) -> list[dict]:
+    results = []
+    soup = _soup(source["url"])
+    if soup is None:
+        return results
+
+    arts = soup.select("article.product-miniature, .product-miniature")
+    seen = set()
+    for a in arts:
+        # Preferuj h2/h3/.product-title (obsahují titulek) před a.thumbnail (jen img alt)
+        title_el = (
+            a.select_one("h2.product-title a")
+            or a.select_one(".product-title a")
+            or a.select_one("h2 a")
+            or a.select_one("h3 a")
+            or a.select_one(".product-name a")
+        )
+        title = ""
+        href = None
+        if title_el and title_el.has_attr("href"):
+            href = urljoin(source["url"], title_el["href"].strip())
+            title = title_el.get_text(" ", strip=True)
+        # Fallback: a.thumbnail s img[alt]
+        if not title:
+            thumb = a.select_one("a.thumbnail, a.product-thumbnail")
+            if thumb:
+                if not href and thumb.has_attr("href"):
+                    href = urljoin(source["url"], thumb["href"].strip())
+                img = thumb.find("img")
+                if img and img.get("alt"):
+                    title = img["alt"].strip()
+        if not href or not title:
+            continue
+        if href in seen:
+            continue
+        seen.add(href)
+
+        # Odstraň prefix "Bazar -" (typické pro air-sport.cz)
+        title = re.sub(r"^\s*Bazar\s*[-–:]\s*", "", title, flags=re.IGNORECASE).strip()
+        if not title or len(title) < 4:
+            continue
+
+        # Skip non-křídla
+        if re.search(
+            r"\b(gurtzeug|harness|sedacka|sedačka|reserve|záloha|záložn|"
+            r"helm|přilba|prilba|vario|skytraxx|garmin|rucksack|batoh|tasque|tasche|"
+            r"cockpit|gutschein|voucher|macpack|pad[áa]k)\b",
+            title, re.IGNORECASE,
+        ):
+            continue
+
+        # Cena – EUR nebo Kč
+        price_eur = None
+        price_el = a.select_one(".product-price-and-shipping, .price, .product-price")
+        if price_el:
+            ptxt = price_el.get_text(" ", strip=True)
+            price_eur = _parse_price_eur(ptxt)
+            if price_eur is None:
+                # Kč: "18 000,00 Kč" / "1 500 Kč" / "18.000 Kč"
+                kc_m = re.search(r"(\d[\d\s\u00a0\.,]*)\s*K[čc]\b", ptxt)
+                if kc_m:
+                    raw = kc_m.group(1)
+                    # Odstraň whitespace a tisíc. tečky/mezery, čárku jako desetinnou ignoruj (bereme jen celé Kč)
+                    raw = re.sub(r"[\s\u00a0]", "", raw)
+                    if "," in raw:
+                        raw = raw.split(",")[0]
+                    raw = raw.replace(".", "")
+                    try:
+                        price_eur = round(float(raw) / 25.0, 0)
+                    except ValueError:
+                        pass
+
+        cat_m = re.search(r"\bEN[-\s/]?[ABCD]\b", title, re.IGNORECASE)
+        category = cat_m.group(0).upper().replace(" ", "").replace("/", "-") if cat_m else None
+
+        size = None
+        size_m = re.search(r"\b(XXS|XS|S|M|ML|L|XL|XXL)\b", title)
+        if size_m:
+            size = size_m.group(1).upper()
+        else:
+            size_n = re.search(r"\b(\d{2})\b", title)
+            if size_n:
+                size = size_n.group(1)
+
+        year = _parse_year(title)
+
+        results.append(_listing(
+            source_id=source["id"],
+            source_name=source["name"],
+            country=source["country"],
+            title=title[:160],
+            url=href,
+            price_eur=price_eur,
+            year=year,
+            category=category,
+            size=size,
+        ))
+
+    logger.info("[%s] scraped %d listings", source["id"], len(results))
+    return results
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# ABC Paragliding CZ – tabulka (model | velikost | test | rok | cena € | stav)
+# Žádné per-row URL → URL = base, dedup dle (source_id, title+rok+vel)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def scrape_abc_paragliding_cz(source: dict) -> list[dict]:
+    results = []
+    r = _get(source["url"])
+    if r is None:
+        logger.info("[%s] scraped 0 listings", source["id"])
+        return results
+    # Vynutit UTF-8 dekódování
+    r.encoding = "utf-8"
+    soup = BeautifulSoup(r.text, "html.parser")
+
+    seen = set()
+    for tbl in soup.find_all("table"):
+        rows = tbl.find_all("tr")
+        if len(rows) < 2:
+            continue
+        # První řádek je hlavička: musí obsahovat "Cena" a "Rok"
+        header_text = rows[0].get_text(" ", strip=True).lower()
+        if "cena" not in header_text or ("rok" not in header_text and "výrob" not in header_text):
+            continue
+
+        for row in rows[1:]:
+            cells = [c.get_text(" ", strip=True) for c in row.find_all(["td", "th"])]
+            if len(cells) < 5:
+                continue
+            model = cells[0]
+            size = cells[1]
+            test = cells[2]
+            year_s = cells[3]
+            price_s = cells[4]
+            if not model or not price_s:
+                continue
+            # Skip pokud první sloupec je hlavička sub-kategorie ("Klzáky kategórie - B")
+            if re.search(r"klz[áa]k|kategori", model, re.IGNORECASE):
+                continue
+
+            # Cena v € (formát: "1.680" = 1680, "780" = 780, "1.090" = 1090)
+            price_eur = None
+            price_clean = re.sub(r"[^\d.]", "", price_s)
+            if price_clean:
+                # Tisíc. oddělovač = tečka. Sloučit.
+                price_clean = price_clean.replace(".", "")
+                try:
+                    val = float(price_clean)
+                    if 50 <= val <= 100000:
+                        price_eur = val
+                except ValueError:
+                    pass
+            year = None
+            try:
+                yi = int(re.sub(r"[^\d]", "", year_s)[:4])
+                if 1990 <= yi <= 2030:
+                    year = yi
+            except ValueError:
+                pass
+
+            # Kategorie z testu (např. "LTF - 2, EN - C" → "EN-C")
+            cat_m = re.search(r"EN\s*[-/]?\s*([ABCD])", test, re.IGNORECASE)
+            category = f"EN-{cat_m.group(1).upper()}" if cat_m else None
+
+            # Title složený = model + rok + velikost (kvůli dedupu)
+            title = f"{model} ({year_s}, vel. {size})"
+            key = (model, year_s, size)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            results.append(_listing(
+                source_id=source["id"],
+                source_name=source["name"],
+                country=source["country"],
+                title=title[:160],
+                url=source["url"],  # sdílená URL stránky
+                price_eur=price_eur,
+                year=year,
+                category=category,
+                size=size if size else None,
+            ))
+
+    logger.info("[%s] scraped %d listings", source["id"], len(results))
+    return results
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Registry: source_id → scraper funkce
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -1405,6 +1599,8 @@ _SCRAPERS = {
     "paragliding_bazar_cz_a": scrape_paragliding_bazar_cz,
     "bazos_cz":               scrape_bazos_cz,
     "mamekridla_cz":          scrape_mamekridla_cz,
+    "abc_paragliding_cz":     scrape_abc_paragliding_cz,
+    "airsport_cz":            _scrape_prestashop,
     "willhaben_at":           scrape_willhaben_at,
     "paragliding_store_at":   scrape_paragliding_store_at,
     "gleitschirmschule_at":   _scrape_generic_shop,

@@ -251,6 +251,23 @@ SOURCES = [
         "enabled": True,
         "notes": "E-shop, statický HTML, produktové karty",
     },
+    {
+        "id": "abc_paragliding_cz",
+        "name": "ABC Paragliding CZ – Bazar",
+        "country": "CZ",
+        "url": "https://www.abcparagliding.cz/bazar/13-prodam/",
+        "enabled": True,
+        "trusted": True,
+        "notes": "HTML tabulka (model | vel | EN | rok | cena € | stav), bez per-row URL",
+    },
+    {
+        "id": "airsport_cz",
+        "name": "Air-Sport CZ – Bazar",
+        "country": "CZ",
+        "url": "https://www.air-sport.cz/index.php?id_category=15&controller=category&id_lang=2",
+        "enabled": True,
+        "notes": "PrestaShop, ceny v Kč → /25 EUR (orientačně)",
+    },
 
     # ── AT ──────────────────────────────────────────────────────────────────
     {
