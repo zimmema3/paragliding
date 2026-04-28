@@ -160,22 +160,22 @@ ALL_KNOWN_WINGS = EN_A_WINGS + LOW_B_WINGS + MID_B_WINGS
 # ──────────────────────────────────────────────────────────────────────────────
 ALERT_PROFILES = [
     {
-        "name": "Martin – velikost M (mid-B a níže)",
+        "name": "Martin – velikost S/M (mid-B a níže)",
         "email": None,           # použije ALERT_EMAIL = zimmema3@gmail.com
         "max_category": "mid-B", # EN A + low-B + mid-B
-        "sizes": ["M", "ML", "27", "28"],  # M + rozměrové kódy odpovídající M
+        # S, M, ML + rozměrové kódy odpovídající S a M (Advance, Ozone, Gin, ...)
+        "sizes": ["S", "SM", "M", "ML", "24", "25", "26", "27", "28"],
         "max_price_eur": None,
         "min_year": CURRENT_YEAR - 5,
         "countries": None,
     },
     {
-        "name": "Martin – velikost XS (mid-B a níže)",
-        "email": None,           # také na zimmema3@gmail.com
-        "max_category": "mid-B",
-        # XS, S + číselné rozměrové kódy malých velikostí (Advance, Ozone, Gin)
+        "name": "Klárka – EN A, XS/S, do 1500 €",
+        "email": "klsavlova@gmail.com",
+        "max_category": "a",      # jen EN A (nejbezpečnější)
         "sizes": ["XS", "S", "22", "23", "24", "25", "26"],
-        "max_price_eur": None,
-        "min_year": CURRENT_YEAR - 5,
+        "max_price_eur": 1500,
+        "min_year": CURRENT_YEAR - 6,
         "countries": None,
     },
     # Přidej další profil zkopírováním a upravením:

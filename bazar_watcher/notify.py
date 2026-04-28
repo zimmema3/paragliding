@@ -143,10 +143,41 @@ def _build_email_html(profile_matches: dict[str, tuple[dict, list[dict]]]) -> st
   <h2 style="font-family:sans-serif;color:#1a73e8;">
     🪂 Bazar křídel – {total} nových inzerátů ({date.today()})
   </h2>
+
+  <div style="font-family:sans-serif;font-size:13px;color:#333;line-height:1.5;
+              background:#f4f8ff;border-left:4px solid #1a73e8;
+              padding:10px 14px;margin:10px 0 18px 0;border-radius:4px;">
+    <p style="margin:0 0 8px 0;"><strong>Ahoj 👋</strong></p>
+    <p style="margin:0 0 8px 0;">
+      Tohle je automatický souhrn z bazarového hlídače paraglidingových křídel.
+      Robot každý den ráno v <strong>8:00</strong> projede 16 bazarů
+      (CZ · AT · DE · CH), porovná je s historií a pošle ti tenhle e-mail.
+    </p>
+    <p style="margin:0 0 8px 0;">
+      <strong>V tabulce níže jsou jen <em>nové</em> inzeráty</strong>, které
+      ještě nikdy předtím neviděl &mdash; tzn. den po dni přibývají jen čerstvé
+      přírůstky, nic se neopakuje. Inzeráty viditelné <strong>poprvé dnes</strong>
+      jsou označené štítkem <span style="color:#0a8a3a;font-weight:bold;">🆕 dnes</span>
+      ve sloupci „Poprvé viděno“.
+    </p>
+    <p style="margin:0 0 8px 0;">
+      <strong>Klárko</strong>, podívej se prosím na sekci níže označenou
+      „<em>Klárka – EN A, XS/S, do 1500 €</em>“ &mdash; tam jsou křídla
+      filtrovaná pro tebe (kategorie EN A, malé velikosti, cena do 1500 €).
+      Když tě nějaký inzerát zaujme, klikni na název a otevře se ti detail
+      přímo u prodejce.
+    </p>
+    <p style="margin:0;">
+      Tenhle dnešní e-mail je výjimečně <strong>kompletní výpis</strong> všech
+      aktuálně dostupných inzerátů, abys měla přehled. Od zítra už ti přijdou
+      jen nové přírůstky.
+    </p>
+  </div>
+
   {sections}
   <p style="font-family:sans-serif;font-size:11px;color:#aaa;margin-top:24px;">
     Paragliding Bazar Watcher &nbsp;|&nbsp; CZ · AT · DE · CH &nbsp;|&nbsp;
-    Mid-B a níže &nbsp;|&nbsp; {date.today()}
+    běží denně 8:00 ráno (GitHub Actions) &nbsp;|&nbsp; {date.today()}
   </p>
 </body></html>"""
 
@@ -164,7 +195,11 @@ def _send_smtp(cfg: dict, to: str, subject: str, html: str, plain: str) -> bool:
     msg.attach(MIMEText(html, "html", "utf-8"))
 
     try:
-        context = ssl.create_default_context()
+        try:
+            import certifi
+            context = ssl.create_default_context(cafile=certifi.where())
+        except Exception:
+            context = ssl.create_default_context()
         if cfg["port"] == 587:
             with smtplib.SMTP(cfg["server"], cfg["port"]) as smtp:
                 smtp.starttls(context=context)

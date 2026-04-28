@@ -134,11 +134,30 @@ def find_new(new_listings: list[dict], existing: pd.DataFrame) -> list[dict]:
 def _detect_level(listing: dict) -> int:
     """
     Odhadne úroveň inzerátu (1=A, 2=low-B, 3=mid-B).
-    Používá config.CATEGORY_KEYWORDS_TO_LEVEL.
+    1) Pokud má listing explicitní `category` pole (EN A / EN B / …), použij ho
+       jako autoritativní zdroj — keyword guessing je až fallback (model jména
+       jako "Rise" se najdou jak u EN A, tak u EN B křídel).
+    2) Jinak prochází config.CATEGORY_KEYWORDS_TO_LEVEL.
     """
     from . import config
+
+    cat = (listing.get("category") or "").upper().strip()
+    if cat:
+        # EN A / ENA → 1, EN B / ENB → 2 (low-B), EN C/D → 99 (out)
+        if re.search(r"\bEN[-\s/]?A\b", cat) or cat in ("EN A", "ENA"):
+            return 1
+        if re.search(r"\bEN[-\s/]?B\b", cat) or cat in ("EN B", "ENB"):
+            # Bez dalšího upřesnění bereme jako low-B; mid-B vyžaduje keyword
+            text = " ".join([cat, listing.get("title") or ""]).lower()
+            for keywords, level in config.CATEGORY_KEYWORDS_TO_LEVEL:
+                if level == 3 and any(kw in text for kw in keywords):
+                    return 3
+            return 2
+        if re.search(r"\bEN[-\s/]?[CD]\b", cat) or cat in ("EN C", "EN D", "ENC", "END", "CCC"):
+            return 99
+
     text = " ".join([
-        (listing.get("category") or ""),
+        cat,
         (listing.get("title") or ""),
     ]).lower()
 
