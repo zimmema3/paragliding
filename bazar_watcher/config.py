@@ -171,9 +171,7 @@ ALERT_PROFILES = [
     },
     {
         "name": "Klárka – EN A / low-B, XS/S",
-        # DOČASNĚ přesměrováno na Martina kvůli testování;
-        # pro ostré nasazení vrátit zpět na "klsavlova@gmail.com"
-        "email": None,
+        "email": "klsavlova@gmail.com",
         "max_category": "low-B", # EN A + low-B (začátečnická křídla)
         "sizes": ["XS", "S", "22", "23", "24", "25", "26"],
         "max_price_eur": None,
