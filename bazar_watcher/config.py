@@ -170,11 +170,13 @@ ALERT_PROFILES = [
         "countries": None,
     },
     {
-        "name": "Klárka – EN A, XS/S, do 1500 €",
-        "email": "klsavlova@gmail.com",
+        "name": "Klárka – EN A, XS/S",
+        # DOČASNĚ přesměrováno na Martina kvůli testování;
+        # pro ostré nasazení vrátit zpět na "klsavlova@gmail.com"
+        "email": None,
         "max_category": "a",      # jen EN A (nejbezpečnější)
         "sizes": ["XS", "S", "22", "23", "24", "25", "26"],
-        "max_price_eur": 1500,
+        "max_price_eur": None,
         "min_year": CURRENT_YEAR - 6,
         "countries": None,
     },
