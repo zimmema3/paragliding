@@ -162,8 +162,8 @@ def _build_email_html(profile_matches: dict[str, tuple[dict, list[dict]]]) -> st
     </p>
     <p style="margin:0 0 8px 0;">
       <strong>Klárko</strong>, podívej se prosím na sekci níže označenou
-      „<em>Klárka – EN A, XS/S, do 1500 €</em>“ &mdash; tam jsou křídla
-      filtrovaná pro tebe (kategorie EN A, malé velikosti, cena do 1500 €).
+      „<em>Klárka – EN A / low-B, XS/S</em>“ &mdash; tam jsou křídla
+      filtrovaná pro tebe (začátečnické kategorie EN A a low-B, malé velikosti).
       Když tě nějaký inzerát zaujme, klikni na název a otevře se ti detail
       přímo u prodejce.
     </p>

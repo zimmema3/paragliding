@@ -170,11 +170,11 @@ ALERT_PROFILES = [
         "countries": None,
     },
     {
-        "name": "Klárka – EN A, XS/S",
+        "name": "Klárka – EN A / low-B, XS/S",
         # DOČASNĚ přesměrováno na Martina kvůli testování;
         # pro ostré nasazení vrátit zpět na "klsavlova@gmail.com"
         "email": None,
-        "max_category": "a",      # jen EN A (nejbezpečnější)
+        "max_category": "low-B", # EN A + low-B (začátečnická křídla)
         "sizes": ["XS", "S", "22", "23", "24", "25", "26"],
         "max_price_eur": None,
         "min_year": CURRENT_YEAR - 6,
