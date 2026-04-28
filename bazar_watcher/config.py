@@ -272,6 +272,15 @@ SOURCES = [
         "notes": "Cumulus CMS shop (Jimdo), hproduct microformat – jen křídla, ne harness",
     },
     {
+        "id": "parafly_at",
+        "name": "Parafly AT – Gebrauchtmarkt",
+        "country": "AT",
+        "url": "https://shop.parafly.at/produkt-kategorie/gebrauchtmarkt/",
+        "enabled": True,
+        "trusted": True,
+        "notes": "WooCommerce, generic scraper",
+    },
+    {
         "id": "gleitschirmschule_at",
         "name": "Gleitschirmschule AT \u2013 Gebraucht",
         "country": "AT",
@@ -289,6 +298,15 @@ SOURCES = [
         "url": "https://www.flugsport.de/flugsportladen/gebrauchtschirme.html",
         "enabled": True,
         "notes": "HTML tabulka, přímo parsovatelná, B-G kategorie",
+    },
+    {
+        "id": "hochries_de",
+        "name": "Flugschule Hochries DE – Gebrauchtmarkt",
+        "country": "DE",
+        "url": "https://shop.flugschule-hochries.de/Gebrauchtmarkt/",
+        "enabled": True,
+        "trusted": True,
+        "notes": "Shopware 6, .product-box, generic shopware scraper",
     },
     {
         "id": "kleinanzeigen_de",
@@ -336,4 +354,34 @@ SOURCES = [
         "trusted": True,
         "notes": "Statický HTML",
     },
+    {
+        "id": "fly_ikarus_ch",
+        "name": "Fly Ikarus CH – Occasionen",
+        "country": "CH",
+        "url": "https://fly-ikarus.ch/produkt-kategorie/occasionen/",
+        "enabled": True,
+        "trusted": True,
+        "notes": "WooCommerce, generic scraper",
+    },
+    # ── TODO – kandidáti vyžadující custom scraper / další ladění ──────────
+    # {
+    #     "id": "gleitschirm_direkt_de",  # Joomla, listing podkategorií, vyžaduje hloubkový crawl
+    #     "url": "https://www.gleitschirm-direkt.de/Gebrauchtmarkt/",
+    # },
+    # {
+    #     "id": "airscout365",            # DACH marketplace (.at i .ch alias),
+    #     "url": "https://airscout365.at/",  # vyžaduje JS / search query / API
+    # },
+    # {
+    #     "id": "flyingcenter_ch",        # Joomla, plain text seznam, custom parsing
+    #     "url": "https://www.flyingcenter.ch/fuer-piloten/ausruestung/occasionen",
+    # },
+    # {
+    #     "id": "airsport_cz",            # PrestaShop s mnoha podkategoriemi
+    #     "url": "https://www.air-sport.cz/index.php?id_category=15&controller=category&id_lang=2",
+    # },
+    # {
+    #     "id": "abc_paragliding_cz",     # Vlastní bazar, paginace, neobvyklá struktura
+    #     "url": "https://www.abcparagliding.cz/bazar/13-prodam/",
+    # },
 ]

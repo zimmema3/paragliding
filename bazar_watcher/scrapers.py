@@ -1210,6 +1210,191 @@ def scrape_kleinanzeigen_de(source: dict) -> list[dict]:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Generický WooCommerce scraper – pro shopy s <li class="product"> strukturou
+# Použití: fly_ikarus_ch, parafly_at
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _scrape_woocommerce(source: dict) -> list[dict]:
+    results = []
+    soup = _soup(source["url"])
+    if soup is None:
+        return results
+
+    products = soup.select(
+        "li.product, ul.products li, .products .product, "
+        ".product.type-product, div.product.type-product"
+    )
+    seen = set()
+    for p in products:
+        link = p.find("a", href=True)
+        if not link:
+            continue
+        href = urljoin(source["url"], link["href"].strip())
+        # Skip self-link na kategorii (WooCommerce loop někdy obsahuje category badge)
+        if href.rstrip("/") == source["url"].rstrip("/"):
+            continue
+        if "/produkt/" not in href and "/product/" not in href:
+            continue
+        if href in seen:
+            continue
+        seen.add(href)
+
+        title_el = p.select_one(
+            ".woocommerce-loop-product__title, h2, h3, .product-title, .product_title"
+        )
+        title = title_el.get_text(strip=True) if title_el else ""
+        if not title or len(title) < 4:
+            continue
+
+        # Skip non-křídla (sedačky, padáky, vario, helmy)
+        if re.search(
+            r"\b(gurtzeug|harness|sedacka|sedačka|reserve|notschirm|rettung|"
+            r"helm|integralhelm|vario|skytraxx|garmin|funkger[äa]t|rucksack|"
+            r"packsack|tasche|cockpit|gutschein|voucher|pod\b)\b",
+            title, re.IGNORECASE,
+        ):
+            continue
+
+        # Cena: WooCommerce má <span class="price"><bdi>1.234,00 €</bdi></span>
+        # Někdy je tam přeškrtnutá + zlevněná → vezmi POSLEDNÍ cenu (= aktuální)
+        price_eur = None
+        price_el = p.select_one(".price")
+        if price_el:
+            # Vezmi všechny <bdi> = jednotlivé ceny v rámci span.price
+            bdis = price_el.find_all("bdi")
+            price_text = bdis[-1].get_text(" ", strip=True) if bdis else price_el.get_text(" ", strip=True)
+            price_eur = _parse_price_eur(price_text)
+            if price_eur is None:
+                price_eur = _parse_price_chf_to_eur(price_text)
+
+        # Kategorie EN A/B/C/D z titulku
+        cat_m = re.search(r"\bEN[-\s/]?[ABCD]\b", title, re.IGNORECASE)
+        category = cat_m.group(0).upper().replace(" ", "").replace("/", "-") if cat_m else None
+
+        # Velikost: XS/S/M/ML/L/XL nebo číslo (21, 24, 27)
+        size = None
+        size_m = re.search(r"\b(XXS|XS|S|M|ML|L|XL|XXL)\b", title)
+        if size_m:
+            size = size_m.group(1).upper()
+        else:
+            size_n = re.search(r"\b(\d{2})\b", title)
+            if size_n:
+                size = size_n.group(1)
+
+        # Hmotnostní rozsah (z titulku, např. "70-90kg")
+        wt_m = re.search(r"(\d{2,3}\s*[-–]\s*\d{2,3}\s*kg)", title, re.IGNORECASE)
+        weight = wt_m.group(1).replace(" ", "") if wt_m else None
+
+        year = _parse_year(title)
+
+        results.append(_listing(
+            source_id=source["id"],
+            source_name=source["name"],
+            country=source["country"],
+            title=title[:160],
+            url=href,
+            price_eur=price_eur,
+            year=year,
+            category=category,
+            size=size,
+            weight_range=weight,
+        ))
+
+    logger.info("[%s] scraped %d listings", source["id"], len(results))
+    return results
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Generický Shopware scraper – .product-box karty
+# Použití: hochries_de (Shopware 6), částečně podobně paraglidingshop_ch
+# Title je v <a title="..."> nebo v product-name elementu.
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _scrape_shopware(source: dict) -> list[dict]:
+    results = []
+    soup = _soup(source["url"])
+    if soup is None:
+        return results
+
+    boxes = soup.select(".product-box, .product--box, .product-box-container")
+    seen = set()
+    for box in boxes:
+        link = box.find("a", href=True)
+        if not link:
+            continue
+        href = urljoin(source["url"], link["href"].strip())
+        if href in seen:
+            continue
+        seen.add(href)
+
+        # Title: nejprve a[title], pak .product-name / .product--title, pak link text
+        title = (link.get("title") or "").strip()
+        if not title:
+            title_el = box.select_one(".product-name, .product--title, .product-box-title")
+            if title_el:
+                title = title_el.get_text(strip=True)
+        if not title:
+            # Fallback: vytáhni z URL (Shopware 6 SEO URL)
+            title = re.sub(r"-", " ", href.rstrip("/").split("/")[-1])
+        if not title or len(title) < 4:
+            continue
+
+        # Skip non-křídla
+        if re.search(
+            r"\b(gurtzeug|harness|reserve|notschirm|rettung|helm|integralhelm|"
+            r"vario|skytraxx|garmin|funkger[äa]t|rucksack|packsack|tasche|"
+            r"cockpit|gutschein|voucher|pod\b)\b",
+            title, re.IGNORECASE,
+        ):
+            continue
+
+        # Cena
+        price_eur = None
+        price_el = box.select_one(".product-price, .product--price, .price--default")
+        if price_el:
+            price_text = price_el.get_text(" ", strip=True)
+            price_eur = _parse_price_eur(price_text)
+            if price_eur is None:
+                price_eur = _parse_price_chf_to_eur(price_text)
+
+        # Kategorie EN A/B/C/D
+        cat_m = re.search(r"\bEN[-\s/]?[ABCD]\b", title, re.IGNORECASE)
+        category = cat_m.group(0).upper().replace(" ", "").replace("/", "-") if cat_m else None
+
+        # Velikost
+        size = None
+        size_m = re.search(r"\b(XXS|XS|S|M|ML|L|XL|XXL)\b", title)
+        if size_m:
+            size = size_m.group(1).upper()
+        else:
+            size_n = re.search(r"\b(\d{2})\b", title)
+            if size_n:
+                size = size_n.group(1)
+
+        # Hmotnost
+        wt_m = re.search(r"(\d{2,3}\s*[-–]\s*\d{2,3}\s*kg)", title, re.IGNORECASE)
+        weight = wt_m.group(1).replace(" ", "") if wt_m else None
+
+        year = _parse_year(title)
+
+        results.append(_listing(
+            source_id=source["id"],
+            source_name=source["name"],
+            country=source["country"],
+            title=title[:160],
+            url=href,
+            price_eur=price_eur,
+            year=year,
+            category=category,
+            size=size,
+            weight_range=weight,
+        ))
+
+    logger.info("[%s] scraped %d listings", source["id"], len(results))
+    return results
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Registry: source_id → scraper funkce
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -1223,11 +1408,14 @@ _SCRAPERS = {
     "willhaben_at":           scrape_willhaben_at,
     "paragliding_store_at":   scrape_paragliding_store_at,
     "gleitschirmschule_at":   _scrape_generic_shop,
+    "parafly_at":             _scrape_woocommerce,
     "flugsport_de":           scrape_flugsport_de,
     "kleinanzeigen_de":       scrape_kleinanzeigen_de,
+    "hochries_de":            _scrape_shopware,
     "swissgliders_ch":        scrape_swissgliders_ch,
     "paraglidingshop_ch":     scrape_paraglidingshop_ch,
     "alpstein_ch":            scrape_alpstein_ch,
+    "fly_ikarus_ch":          _scrape_woocommerce,
 }
 
 
