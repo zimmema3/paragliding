@@ -183,11 +183,11 @@ ALERT_PROFILES = [
     # (viz BCC_OWNER_ON_FRIEND_PROFILES níže).
     {
         "name": "Kamarád 1 – M/ML/L, mid-B (80–105 kg)",
-        "email": "lasinorelv@gmail.com",
+        "email": "lasinorel@gmail.com",
         "max_category": "mid-B",       # EN A + low-B + mid-B (celý EN B)
         "sizes": ["M", "ML", "MS", "L", "26", "27", "28", "29"],  # 80–105 kg
         "max_price_eur": 2000,         # 50 000 Kč
-        "min_year": CURRENT_YEAR - 5,
+        "min_year": CURRENT_YEAR - 6,
         "countries": None,
     },
     {
@@ -196,7 +196,7 @@ ALERT_PROFILES = [
         "max_category": "low-B",
         "sizes": ["M", "ML"],
         "max_price_eur": None,
-        "min_year": CURRENT_YEAR - 5,
+        "min_year": CURRENT_YEAR - 6,
         "countries": None,
         "enabled": False,
     },
@@ -206,7 +206,7 @@ ALERT_PROFILES = [
         "max_category": "low-B",
         "sizes": ["M", "ML"],
         "max_price_eur": None,
-        "min_year": CURRENT_YEAR - 5,
+        "min_year": CURRENT_YEAR - 6,
         "countries": None,
         "enabled": False,
     },
