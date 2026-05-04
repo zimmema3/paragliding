@@ -144,35 +144,11 @@ def _build_email_html(profile_matches: dict[str, tuple[dict, list[dict]]]) -> st
     🪂 Bazar křídel – {total} nových inzerátů ({date.today()})
   </h2>
 
-  <div style="font-family:sans-serif;font-size:13px;color:#333;line-height:1.5;
-              background:#f4f8ff;border-left:4px solid #1a73e8;
-              padding:10px 14px;margin:10px 0 18px 0;border-radius:4px;">
-    <p style="margin:0 0 8px 0;"><strong>Ahoj 👋</strong></p>
-    <p style="margin:0 0 8px 0;">
-      Tohle je automatický souhrn z bazarového hlídače paraglidingových křídel.
-      Robot každý den ráno v <strong>8:00</strong> projede 16 bazarů
-      (CZ · AT · DE · CH), porovná je s historií a pošle ti tenhle e-mail.
-    </p>
-    <p style="margin:0 0 8px 0;">
-      <strong>V tabulce níže jsou jen <em>nové</em> inzeráty</strong>, které
-      ještě nikdy předtím neviděl &mdash; tzn. den po dni přibývají jen čerstvé
-      přírůstky, nic se neopakuje. Inzeráty viditelné <strong>poprvé dnes</strong>
-      jsou označené štítkem <span style="color:#0a8a3a;font-weight:bold;">🆕 dnes</span>
-      ve sloupci „Poprvé viděno“.
-    </p>
-    <p style="margin:0 0 8px 0;">
-      <strong>Klárko</strong>, podívej se prosím na sekci níže označenou
-      „<em>Klárka – EN A / low-B, XS/S</em>“ &mdash; tam jsou křídla
-      filtrovaná pro tebe (začátečnické kategorie EN A a low-B, malé velikosti).
-      Když tě nějaký inzerát zaujme, klikni na název a otevře se ti detail
-      přímo u prodejce.
-    </p>
-    <p style="margin:0;">
-      Tenhle dnešní e-mail je výjimečně <strong>kompletní výpis</strong> všech
-      aktuálně dostupných inzerátů, abys měla přehled. Od zítra už ti přijdou
-      jen nové přírůstky.
-    </p>
-  </div>
+  <p style="font-family:sans-serif;font-size:13px;color:#555;margin:0 0 18px 0;">
+    Automatický přehled z bazarového hlíače (CZ · AT · DE · CH), denně 8:00.
+    Každá sekce níže odpovídat jednomu profilu s vlastními filtry (kategorie, velikost, cena).
+    Klikni na název inzerátu pro detail u prodávajího.
+  </p>
 
   {sections}
   <p style="font-family:sans-serif;font-size:11px;color:#aaa;margin-top:24px;">
@@ -186,13 +162,19 @@ def _build_email_html(profile_matches: dict[str, tuple[dict, list[dict]]]) -> st
 # Odesílání
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _send_smtp(cfg: dict, to: str, subject: str, html: str, plain: str) -> bool:
+def _send_smtp(cfg: dict, to: str, subject: str, html: str, plain: str,
+               bcc: str | None = None) -> bool:
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"] = cfg["user"]
     msg["To"] = to
+    # BCC záměrně nepidáváme do hlavičky (jinak by to byl CC); jen do envelope.
     msg.attach(MIMEText(plain, "plain", "utf-8"))
     msg.attach(MIMEText(html, "html", "utf-8"))
+
+    recipients = [to]
+    if bcc and bcc.lower() != to.lower():
+        recipients.append(bcc)
 
     try:
         try:
@@ -204,11 +186,11 @@ def _send_smtp(cfg: dict, to: str, subject: str, html: str, plain: str) -> bool:
             with smtplib.SMTP(cfg["server"], cfg["port"]) as smtp:
                 smtp.starttls(context=context)
                 smtp.login(cfg["user"], cfg["password"])
-                smtp.sendmail(cfg["user"], to, msg.as_string())
+                smtp.sendmail(cfg["user"], recipients, msg.as_string())
         else:
             with smtplib.SMTP_SSL(cfg["server"], cfg["port"], context=context) as smtp:
                 smtp.login(cfg["user"], cfg["password"])
-                smtp.sendmail(cfg["user"], to, msg.as_string())
+                smtp.sendmail(cfg["user"], recipients, msg.as_string())
         return True
     except smtplib.SMTPException as exc:
         logger.error("SMTP selhalo (%s): %s", to, exc)
@@ -277,6 +259,9 @@ def send_alerts(
         if dry_run:
             print(f"\n{'='*60}")
             print(f"DRY RUN → To: {to_addr}")
+            bcc_owner = _resolve_bcc(to_addr, cfg)
+            if bcc_owner:
+                print(f"           BCC: {bcc_owner}")
             print(f"Subject: {subject}")
             for pname, (_, listings) in profiles.items():
                 print(f"  [{pname}] {len(listings)} inzerátů")
@@ -284,10 +269,31 @@ def send_alerts(
                     print(f"    - {lst.get('title','')[:80]} | {lst.get('price_eur','?')} € | {lst.get('year','?')}")
             print("=" * 60)
         else:
-            ok = _send_smtp(cfg, to_addr, subject, html, plain)
+            bcc_owner = _resolve_bcc(to_addr, cfg)
+            ok = _send_smtp(cfg, to_addr, subject, html, plain, bcc=bcc_owner)
             if ok:
-                logger.info("Email odeslán → %s (%d inzerátů)", to_addr, total)
+                bcc_note = f" (+BCC {bcc_owner})" if bcc_owner else ""
+                logger.info("Email odeslán → %s%s (%d inzerátů)", to_addr, bcc_note, total)
             else:
                 success = False
 
     return success
+
+
+def _resolve_bcc(to_addr: str, cfg: dict) -> str | None:
+    """Vrátí BCC adresu (vlastník) pro friend profily.
+    Aktivní pokud config.BCC_OWNER_ON_FRIEND_PROFILES = True
+    a cílový email se liší od ALERT_EMAIL.
+    """
+    try:
+        from . import config as _cfg
+        if not getattr(_cfg, "BCC_OWNER_ON_FRIEND_PROFILES", False):
+            return None
+    except Exception:
+        return None
+    owner = cfg.get("default_to") or cfg.get("user")
+    if not owner:
+        return None
+    if owner.lower() == to_addr.lower():
+        return None
+    return owner

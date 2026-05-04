@@ -141,7 +141,8 @@ def _detect_level(listing: dict) -> int:
     """
     from . import config
 
-    cat = (listing.get("category") or "").upper().strip()
+    _cat_raw = listing.get("category")
+    cat = ("" if not isinstance(_cat_raw, str) else _cat_raw).upper().strip()
     if cat:
         # EN A / ENA → 1, EN B / ENB → 2 (low-B), EN C/D → 99 (out)
         if re.search(r"\bEN[-\s/]?A\b", cat) or cat in ("EN A", "ENA"):
@@ -292,16 +293,21 @@ def apply_profile_filter(listings: list[dict], profile: dict) -> list[dict]:
                     for s in allowed_sizes if s.isdigit()
                 )
                 # 3. Písmenkové velikosti (XS, S, M, L, ML)
-                #    → vyžaduj, aby stály PŘED hmotnostním rozsahem: "M 80-100kg"
-                #      (zabrání falešnému matchování "S" v "S batohem")
-                alpha_before_weight = any(
+                #    Strategie A: "M 80-100kg" (CZ styl, nejspolehlivější)
+                #    Strategie B: obecné word-boundary "Größe M", "Size M", "Rush 5 M"
+                #      → slovní hranice oboustranně, vyloučíme singlechar jen uprostřed slova
+                alpha_sizes = [s for s in allowed_sizes if not s.isdigit()]
+                alpha_ok = any(
                     re.search(
-                        rf"\b{re.escape(s)}\s+\d{{2,3}}\s*[-\u2013]\s*\d{{2,3}}\s*kg",
+                        rf"(?:Gr[oö][ß]e|Gr\.|Size|Vel\.?|velikost|Gre|\bsize\b)\s*[:\-]?\s*{re.escape(s)}\b"
+                        rf"|\b{re.escape(s)}\s+\d{{2,3}}\s*[-\u2013]\s*\d{{2,3}}\s*kg"
+                        rf"|\b{re.escape(s)}\b(?!\w)",
                         title_up,
+                        re.IGNORECASE,
                     )
-                    for s in allowed_sizes if not s.isdigit()
+                    for s in alpha_sizes
                 )
-                size_ok = numeric_ok or alpha_before_weight
+                size_ok = numeric_ok or alpha_ok
 
             if not size_ok:
                 continue

@@ -178,17 +178,44 @@ ALERT_PROFILES = [
         "min_year": CURRENT_YEAR - 6,
         "countries": None,
     },
-    # Přidej další profil zkopírováním a upravením:
-    # {
-    #     "name": "Kamarád – low-B L",
-    #     "email": "nekdo@gmail.com",
-    #     "max_category": "low-B",
-    #     "sizes": ["L", "LM"],
-    #     "max_price_eur": 2000,
-    #     "min_year": CURRENT_YEAR - 4,
-    #     "countries": ["CZ", "AT"],
-    # },
+    # ── Kamarádi ─ TODO: doplň email + sizes + max_category + min_year ──
+    # Owner (Martin) je automaticky BCC u všech profilů s vlastním emailem
+    # (viz BCC_OWNER_ON_FRIEND_PROFILES níže).
+    {
+        "name": "Kamarád 1 – M/ML/L, mid-B (80–105 kg)",
+        "email": "lasinorelv@gmail.com",
+        "max_category": "mid-B",       # EN A + low-B + mid-B (celý EN B)
+        "sizes": ["M", "ML", "MS", "L", "26", "27", "28", "29"],  # 80–105 kg
+        "max_price_eur": 2000,         # 50 000 Kč
+        "min_year": CURRENT_YEAR - 5,
+        "countries": None,
+    },
+    {
+        "name": "Kamarád 2 – TODO",
+        "email": "TODO@example.com",
+        "max_category": "low-B",
+        "sizes": ["M", "ML"],
+        "max_price_eur": None,
+        "min_year": CURRENT_YEAR - 5,
+        "countries": None,
+        "enabled": False,
+    },
+    {
+        "name": "Kamarád 3 – TODO",
+        "email": "TODO@example.com",
+        "max_category": "low-B",
+        "sizes": ["M", "ML"],
+        "max_price_eur": None,
+        "min_year": CURRENT_YEAR - 5,
+        "countries": None,
+        "enabled": False,
+    },
 ]
+
+# Pokud True: u všech profilů, které mají vlastní `email` (= není None / není
+# default ALERT_EMAIL), bude vlastník (ALERT_EMAIL) přidán jako BCC.
+# Tím vidíš všechny e-maily, které hlídac přátelům posílá.
+BCC_OWNER_ON_FRIEND_PROFILES = True
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Interní mapování kategorie → číselná úroveň pro porovnání max_category

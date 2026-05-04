@@ -96,6 +96,8 @@ def main():
         all_listings = existing.to_dict(orient="records")
         print("\n── Alert profily (z existujících dat) ──────────────────")
         for prof in config.ALERT_PROFILES:
+            if prof.get("enabled") is False:
+                continue
             matched = storage.apply_profile_filter(all_listings, prof)
             print(f"  [{prof['name']}] → {len(matched)} inzerátů splňuje kritéria")
         return
@@ -124,6 +126,9 @@ def main():
     # format: { profile_name: (profile_dict, [listings]) }
     profile_matches: dict[str, tuple[dict, list]] = {}
     for prof in config.ALERT_PROFILES:
+        if prof.get("enabled") is False:
+            logger.info("Profil '%s': enabled=False, přeskočeno", prof["name"])
+            continue
         listings_for_alert = new_for_alert if not args.force_notify else storage_filtered
         # Doplň first_seen z CSV (pro reimport/force_notify ukáže reálné stáří)
         storage.enrich_first_seen(listings_for_alert, existing)
