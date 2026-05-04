@@ -177,21 +177,27 @@ def _send_smtp(cfg: dict, to: str, subject: str, html: str, plain: str,
         recipients.append(bcc)
 
     try:
-        try:
-            import certifi
-            context = ssl.create_default_context(cafile=certifi.where())
-        except Exception:
-            context = ssl.create_default_context()
-        if cfg["port"] == 587:
-            with smtplib.SMTP(cfg["server"], cfg["port"]) as smtp:
-                smtp.starttls(context=context)
-                smtp.login(cfg["user"], cfg["password"])
-                smtp.sendmail(cfg["user"], recipients, msg.as_string())
-        else:
-            with smtplib.SMTP_SSL(cfg["server"], cfg["port"], context=context) as smtp:
-                smtp.login(cfg["user"], cfg["password"])
-                smtp.sendmail(cfg["user"], recipients, msg.as_string())
-        return True
+        # Try strict SSL verification first; fall back to no-verify if intercepted (antivirus/VPN)
+        for verify in (True, False):
+            try:
+                context = ssl.create_default_context()
+                if not verify:
+                    context.check_hostname = False
+                    context.verify_mode = ssl.CERT_NONE
+                if cfg["port"] == 587:
+                    with smtplib.SMTP(cfg["server"], cfg["port"]) as smtp:
+                        smtp.starttls(context=context)
+                        smtp.login(cfg["user"], cfg["password"])
+                        smtp.sendmail(cfg["user"], recipients, msg.as_string())
+                else:
+                    with smtplib.SMTP_SSL(cfg["server"], cfg["port"], context=context) as smtp:
+                        smtp.login(cfg["user"], cfg["password"])
+                        smtp.sendmail(cfg["user"], recipients, msg.as_string())
+                return True
+            except ssl.SSLError:
+                if not verify:
+                    raise
+                logger.debug("SSL verifikace selhala, zkouším bez ověření certifikátu ...")
     except smtplib.SMTPException as exc:
         logger.error("SMTP selhalo (%s): %s", to, exc)
         return False

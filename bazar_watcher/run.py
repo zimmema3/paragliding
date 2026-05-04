@@ -95,11 +95,16 @@ def main():
     if args.filter_only:
         all_listings = existing.to_dict(orient="records")
         print("\n── Alert profily (z existujících dat) ──────────────────")
+        profile_matches_fo: dict[str, tuple[dict, list]] = {}
         for prof in config.ALERT_PROFILES:
             if prof.get("enabled") is False:
                 continue
             matched = storage.apply_profile_filter(all_listings, prof)
+            profile_matches_fo[prof["name"]] = (prof, matched)
             print(f"  [{prof['name']}] → {len(matched)} inzerátů splňuje kritéria")
+        if args.force_notify:
+            _print_profile_results(profile_matches_fo)
+            notify.send_alerts(profile_matches_fo, dry_run=args.dry_run)
         return
 
     # ── 2. Scraper ────────────────────────────────────────────────────────
