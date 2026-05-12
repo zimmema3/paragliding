@@ -189,6 +189,7 @@ ALERT_PROFILES = [
         "max_price_eur": 2000,         # 50 000 Kč
         "min_year": CURRENT_YEAR - 6,
         "countries": None,
+        "enabled": False,
     },
     {
         "name": "Kamarád 2 – TODO",
