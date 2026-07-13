@@ -192,14 +192,14 @@ ALERT_PROFILES = [
         "enabled": False,
     },
     {
-        "name": "Kamarád 2 – TODO",
-        "email": "TODO@example.com",
-        "max_category": "low-B",
-        "sizes": ["M", "ML"],
-        "max_price_eur": None,
+        "name": "Michal – low-B, S, do 1300 €",
+        "email": "bublikmichal@seznam.cz",
+        "max_category": "low-B",       # EN A + low-B
+        "sizes": ["S", "SM", "22", "23", "24", "25", "26"],  # S
+        "max_price_eur": 1300,
         "min_year": CURRENT_YEAR - 6,
         "countries": None,
-        "enabled": False,
+        "enabled": True,
     },
     {
         "name": "Kamarád 3 – TODO",
