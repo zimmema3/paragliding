@@ -58,7 +58,7 @@ jobs:
           SMTP_SERVER: smtp.gmail.com
           SMTP_PORT:   "465"
           SMTP_USER:   zimmema3@gmail.com
-          SMTP_PASS:   puommxyciboshoqi
+          SMTP_PASS:   ${{ secrets.SMTP_PASS }}
           ALERT_EMAIL: zimmema3@gmail.com
         run: |
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
