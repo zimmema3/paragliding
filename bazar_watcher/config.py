@@ -168,6 +168,7 @@ ALERT_PROFILES = [
         "max_price_eur": None,
         "min_year": CURRENT_YEAR - 5,
         "countries": None,
+        "enabled": False,        # dočasně vypnuto – šetří Actions minuty
     },
     {
         "name": "Klárka – EN A / low-B, XS/S",
