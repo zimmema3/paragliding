@@ -305,7 +305,7 @@ SOURCES = [
         "country": "AT",
         # JSON API endpoint – vrací data bez JS renderu
         "url": "https://www.willhaben.at/webapi/iad/search/atz/seo/kaufen-und-verkaufen/l/gleitschirm",
-        "enabled": True,
+        "enabled": False,  # nikdy nevrátil žádný záznam (API asi změněné/blokované)
         "notes": "JSON API, rows=100, header Accept: application/json",
     },
     {
@@ -360,7 +360,7 @@ SOURCES = [
         "country": "DE",
         # Atom/RSS feed – nevyžaduje JS render
         "url": "https://www.kleinanzeigen.de/s-sport-camping/paragliding/k0c230.atom",
-        "enabled": True,
+        "enabled": False,  # nikdy nevrátil žádný záznam (feed asi změněný/blokovaný)
         "notes": "Atom XML feed, žádný JS",
     },
     {
