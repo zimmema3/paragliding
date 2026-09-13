@@ -171,10 +171,10 @@ ALERT_PROFILES = [
         "enabled": False,        # dočasně vypnuto – šetří Actions minuty
     },
     {
-        "name": "Klárka – EN A / low-B, XS/S",
+        "name": "Klárka – EN A / low-B, XXS/XS",
         "email": "klsavlova@gmail.com",
         "max_category": "low-B", # EN A + low-B (začátečnická křídla)
-        "sizes": ["XS", "S", "22", "23", "24", "25", "26"],
+        "sizes": ["XXS","XS", "S", "19","20","21","22", "23", "24"],
         "max_price_eur": None,
         "min_year": CURRENT_YEAR - 6,
         "countries": None,
@@ -200,7 +200,7 @@ ALERT_PROFILES = [
         "max_price_eur": 1300,
         "min_year": CURRENT_YEAR - 6,
         "countries": None,
-        "enabled": True,
+        "enabled": False,
     },
     {
         "name": "Kamarád 3 – TODO",
