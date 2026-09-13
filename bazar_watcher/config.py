@@ -200,7 +200,7 @@ ALERT_PROFILES = [
         "max_price_eur": 1300,
         "min_year": CURRENT_YEAR - 6,
         "countries": None,
-        "enabled": False,
+        "enabled": True,
     },
     {
         "name": "Kamarád 3 – TODO",
